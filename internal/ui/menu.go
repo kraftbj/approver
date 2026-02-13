@@ -37,6 +37,7 @@ func DefaultHints() []KeyHint {
 		{"Tab", "cycle view"},
 		{"R", "refresh"},
 		{"A", "approve"},
+		{"X", "request changes"},
 		{"o", "open"},
 		{"?", "help"},
 		{"q", "quit"},

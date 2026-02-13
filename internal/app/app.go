@@ -45,6 +45,14 @@ const (
 	confirmApprove
 )
 
+// inputAction distinguishes what the text input is being used for.
+type inputAction int
+
+const (
+	inputAddPR          inputAction = iota // Adding a PR by number/URL
+	inputRequestChanges                    // Entering reason for request-changes
+)
+
 // pendingAction tracks an action deferred until worktree creation completes.
 type pendingAction int
 
@@ -71,9 +79,10 @@ type home struct {
 	confirmMsg    string
 	confirmAction confirmAction
 
-	// Text input state (for adding PRs)
+	// Text input state
 	inputBuffer string
 	inputPrompt string
+	inputAction inputAction
 
 	// Working directory (git repo)
 	repoDir string
@@ -271,6 +280,15 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.showError(fmt.Sprintf("Failed to approve PR #%d: %v", msg.prNumber, msg.err))
 		cmds = append(cmds, clearErrorAfter(5*time.Second))
 
+	case prChangesRequestedMsg:
+		h.showError(fmt.Sprintf("Changes requested on PR #%d", msg.prNumber))
+		cmds = append(cmds, clearErrorAfter(3*time.Second))
+		cmds = append(cmds, fetchSinglePRCmd(h.repoDir, fmt.Sprintf("%d", msg.prNumber)))
+
+	case prChangesRequestErrorMsg:
+		h.showError(fmt.Sprintf("Failed to request changes on PR #%d: %v", msg.prNumber, msg.err))
+		cmds = append(cmds, clearErrorAfter(5*time.Second))
+
 	case commentsLoadedMsg:
 		h.comments[msg.prNumber] = msg.comments
 
@@ -383,6 +401,7 @@ func (h *home) handleDefaultKey(key string) tea.Cmd {
 
 	case "a":
 		h.state = stateInput
+		h.inputAction = inputAddPR
 		h.inputPrompt = "Add PR (number or URL): "
 		h.inputBuffer = ""
 
@@ -469,6 +488,15 @@ func (h *home) handleDefaultKey(key string) tea.Cmd {
 		}
 		return h.startTmux(pr.Number, wtPath)
 
+	case "X":
+		pr := h.prList.SelectedPR()
+		if pr != nil {
+			h.state = stateInput
+			h.inputAction = inputRequestChanges
+			h.inputPrompt = fmt.Sprintf("Request changes on #%d — Reason: ", pr.Number)
+			h.inputBuffer = ""
+		}
+
 	case "A":
 		pr := h.prList.SelectedPR()
 		if pr != nil {
@@ -520,7 +548,17 @@ func (h *home) handleInputKey(msg tea.KeyMsg) tea.Cmd {
 		if h.inputBuffer != "" {
 			input := h.inputBuffer
 			h.inputBuffer = ""
-			return fetchSinglePRCmd(h.repoDir, input)
+			switch h.inputAction {
+			case inputRequestChanges:
+				pr := h.prList.SelectedPR()
+				h.state = stateDefault
+				if pr != nil {
+					return requestChangesPRCmd(h.repoDir, pr.Number, input)
+				}
+				return nil
+			default:
+				return fetchSinglePRCmd(h.repoDir, input)
+			}
 		}
 		h.state = stateDefault
 		return nil
@@ -667,6 +705,7 @@ func (h *home) viewHelp(height int) string {
     t              Open Claude tmux session (auto-creates worktree)
                      (Ctrl+b d to detach back to Approver)
     A              Approve PR (with confirmation)
+    X              Request changes (with reason)
     o              Open PR in browser
     R              Refresh PR list
 
@@ -965,6 +1004,20 @@ func reviewSpinnerTick() tea.Cmd {
 	return tea.Tick(4*time.Second, func(time.Time) tea.Msg {
 		return reviewSpinnerTickMsg{}
 	})
+}
+
+func requestChangesPRCmd(repoDir string, prNumber int, body string) tea.Cmd {
+	return func() tea.Msg {
+		cmd := exec.Command("gh", "pr", "review", fmt.Sprintf("%d", prNumber), "--request-changes", "--body", body)
+		if repoDir != "" {
+			cmd.Dir = repoDir
+		}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return prChangesRequestErrorMsg{prNumber: prNumber, err: fmt.Errorf("%s", string(out))}
+		}
+		return prChangesRequestedMsg{prNumber: prNumber}
+	}
 }
 
 func approvePRCmd(repoDir string, prNumber int) tea.Cmd {

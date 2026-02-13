@@ -96,6 +96,17 @@ type prApproveErrorMsg struct {
 	err      error
 }
 
+// prChangesRequestedMsg is sent when changes are successfully requested on a PR.
+type prChangesRequestedMsg struct {
+	prNumber int
+}
+
+// prChangesRequestErrorMsg is sent when requesting changes fails.
+type prChangesRequestErrorMsg struct {
+	prNumber int
+	err      error
+}
+
 // setupDoneMsg is sent when a per-repo setup command completes.
 type setupDoneMsg struct {
 	prNumber int
