@@ -25,6 +25,7 @@
 - **Worktree creation spinner** - Show a progress indicator while a worktree is being created (fetch + checkout can be slow)
 - **Approve from the app** - Submit PR approval (and possibly request-changes/comment) directly from the TUI without opening a browser
 - **Per-repo setup commands** - Config option to specify a command to run in each worktree after creation (e.g. `npm install`, `docker compose up`, `make dev`) to spin up local dev environments
+- **Tmux detach hint** - Show a brief "Ctrl+b d to return" message before entering tmux, or display it in the tmux status bar
 
 ## Phase 3: GitHub Feedback Loop
 

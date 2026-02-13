@@ -557,6 +557,7 @@ func (h *home) viewHelp(height int) string {
     W              Delete worktree (with confirmation)
     c              Start/cancel Claude review
     t              Open Claude tmux session
+                     (Ctrl+b d to detach back to Approver)
     o              Open PR in browser
     R              Refresh PR list
 
