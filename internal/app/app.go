@@ -45,6 +45,7 @@ const (
 	confirmApprove
 	confirmUpdateBranch
 	confirmPushBranch
+	confirmDeleteIssueWorktree
 )
 
 // inputAction distinguishes what the text input is being used for.
@@ -53,6 +54,7 @@ type inputAction int
 const (
 	inputAddPR          inputAction = iota // Adding a PR by number/URL
 	inputRequestChanges                    // Entering reason for request-changes
+	inputAddIssue                          // Adding an issue by number/URL
 )
 
 // prSnapshot captures PR state for change detection between polls.
@@ -79,6 +81,7 @@ type home struct {
 	// Screen management
 	active activeScreen
 	pr     prScreen
+	issues issueScreen
 
 	// UI components
 	menu    ui.Menu
@@ -128,6 +131,17 @@ type home struct {
 	// Fun review spinner rotation
 	reviewMsgIdx int
 
+	// Issue worktree state (issue number -> path)
+	issueWorktrees         map[int]string
+	creatingIssueWorktrees map[int]bool
+
+	// Issue tmux sessions
+	issueTmuxSessions map[int]*claude.TmuxSession
+
+	// Issue pending action
+	pendingIssue    pendingIssueAction
+	pendingIssueNum int
+
 	// Config
 	cfg *config.Config
 }
@@ -138,21 +152,25 @@ func newHome() home {
 	s.Style = lipgloss.NewStyle().Foreground(ui.ColorCyan)
 
 	return home{
-		state:             stateLoading,
-		active:            screenReviews,
-		pr:                newPRScreen(),
-		menu:              ui.NewMenu(),
-		errBox:            ui.NewErrBox(),
-		spinner:           s,
-		loading:           true,
-		worktrees:         make(map[int]string),
-		reviews:           make(map[int]claude.ReviewResult),
-		reviewing:         make(map[int]context.CancelFunc),
-		reviewStep:        make(map[int]string),
-		comments:          make(map[int][]gh.Comment),
-		prSnapshots:       make(map[int]prSnapshot),
-		tmuxSessions:      make(map[int]*claude.TmuxSession),
-		creatingWorktrees: make(map[int]bool),
+		state:                  stateLoading,
+		active:                 screenReviews,
+		pr:                     newPRScreen(),
+		issues:                 newIssueScreen(),
+		menu:                   ui.NewMenu(),
+		errBox:                 ui.NewErrBox(),
+		spinner:                s,
+		loading:                true,
+		worktrees:              make(map[int]string),
+		reviews:                make(map[int]claude.ReviewResult),
+		reviewing:              make(map[int]context.CancelFunc),
+		reviewStep:             make(map[int]string),
+		comments:               make(map[int][]gh.Comment),
+		prSnapshots:            make(map[int]prSnapshot),
+		tmuxSessions:           make(map[int]*claude.TmuxSession),
+		creatingWorktrees:      make(map[int]bool),
+		issueWorktrees:         make(map[int]string),
+		creatingIssueWorktrees: make(map[int]bool),
+		issueTmuxSessions:      make(map[int]*claude.TmuxSession),
 	}
 }
 
@@ -161,7 +179,9 @@ func (h home) Init() tea.Cmd {
 		h.spinner.Tick,
 		fetchPRsCmd(h.repoDir),
 		scanWorktreesCmd(h.wtManager),
+		scanIssueWorktreesCmd(h.wtManager),
 		loadReviewsCmd(),
+		fetchIssuesCmd(h.repoDir),
 	)
 }
 
@@ -177,7 +197,7 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, nil
 
 	case spinner.TickMsg:
-		if h.loading || len(h.reviewing) > 0 || len(h.creatingWorktrees) > 0 {
+		if h.loading || len(h.reviewing) > 0 || len(h.creatingWorktrees) > 0 || len(h.creatingIssueWorktrees) > 0 {
 			var cmd tea.Cmd
 			h.spinner, cmd = h.spinner.Update(msg)
 			cmds = append(cmds, cmd)
@@ -371,6 +391,70 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.showError(fmt.Sprintf("Setup failed for PR #%d: %v", msg.prNumber, msg.err))
 		cmds = append(cmds, clearErrorAfter(5*time.Second))
 
+	// Issue screen messages
+
+	case issuesLoadedMsg:
+		h.issues.loaded = true
+		if h.active == screenIssues && h.loading {
+			h.loading = false
+			h.state = stateDefault
+		}
+		h.issues.issueList.SetIssues(msg.issues)
+		h.reconcileIssueWorktrees()
+		cmds = append(cmds, fetchTrackedIssuesCmd(h.repoDir))
+
+	case trackedIssuesLoadedMsg:
+		for _, issue := range msg.issues {
+			h.addIssueToList(issue)
+		}
+		h.reconcileIssueWorktrees()
+
+	case issuesErrorMsg:
+		if h.active == screenIssues && h.loading {
+			h.loading = false
+			h.state = stateDefault
+		}
+		h.showError(fmt.Sprintf("Failed to fetch issues: %v", msg.err))
+		cmds = append(cmds, clearErrorAfter(3*time.Second))
+
+	case issueAddedMsg:
+		h.addIssueToList(msg.issue)
+		h.state = stateDefault
+		h.inputBuffer = ""
+		addTrackedIssue(msg.issue.Number)
+
+	case issueAddErrorMsg:
+		h.state = stateDefault
+		h.inputBuffer = ""
+		h.showError(fmt.Sprintf("Failed to add issue: %v", msg.err))
+		cmds = append(cmds, clearErrorAfter(3*time.Second))
+
+	case issueWorktreeCreatedMsg:
+		h.issueWorktrees[msg.issueNumber] = msg.path
+		delete(h.creatingIssueWorktrees, msg.issueNumber)
+		h.reconcileIssueWorktrees()
+		if h.pendingIssue != pendingIssueNone && h.pendingIssueNum == msg.issueNumber {
+			cmd := h.dispatchIssuePending(msg.issueNumber, msg.path)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+
+	case issueWorktreeDeletedMsg:
+		delete(h.issueWorktrees, msg.issueNumber)
+		h.reconcileIssueWorktrees()
+
+	case issueWorktreeErrorMsg:
+		delete(h.creatingIssueWorktrees, msg.issueNumber)
+		h.reconcileIssueWorktrees()
+		h.clearIssuePending()
+		h.showError(fmt.Sprintf("Issue worktree error: %v", msg.err))
+		cmds = append(cmds, clearErrorAfter(3*time.Second))
+
+	case issueWorktreesScanMsg:
+		h.issueWorktrees = msg.worktrees
+		h.reconcileIssueWorktrees()
+
 	case tea.KeyMsg:
 		cmd := h.handleKey(msg)
 		if cmd != nil {
@@ -429,7 +513,7 @@ func (h *home) handleDefaultKey(key string) tea.Cmd {
 	case screenReviews:
 		return h.pr.HandleKey(h, key)
 	case screenIssues:
-		return h.handlePlaceholderKey(key)
+		return h.issues.HandleKey(h, key)
 	case screenWatchlist:
 		return h.handlePlaceholderKey(key)
 	}
@@ -476,6 +560,11 @@ func (h *home) handleConfirmKey(key string) tea.Cmd {
 				wtPath := h.worktrees[pr.Number]
 				return pushBranchCmd(wtPath, pr.HeadRefName, pr.Number)
 			}
+		case confirmDeleteIssueWorktree:
+			issue := h.issues.issueList.SelectedIssue()
+			if issue != nil {
+				return deleteIssueWorktreeCmd(h.wtManager, issue.Number)
+			}
 		}
 	case "n", "esc":
 		h.state = stateDefault
@@ -503,6 +592,9 @@ func (h *home) handleInputKey(msg tea.KeyMsg) tea.Cmd {
 					return requestChangesPRCmd(h.repoDir, pr.Number, input)
 				}
 				return nil
+			case inputAddIssue:
+				h.state = stateDefault
+				return fetchSingleIssueCmd(h.repoDir, input)
 			default:
 				return fetchSinglePRCmd(h.repoDir, input)
 			}
@@ -541,7 +633,7 @@ func (h home) View() string {
 	case screenReviews:
 		mainContent = h.pr.View(&h, panelHeight)
 	case screenIssues:
-		mainContent = h.viewPlaceholder("Issues", "Assigned issues will appear here.", panelHeight)
+		mainContent = h.issues.View(&h, panelHeight)
 	case screenWatchlist:
 		mainContent = h.viewPlaceholder("Watchlist", "Tracked PRs will appear here.", panelHeight)
 	}
@@ -606,21 +698,27 @@ func (h *home) viewHelp(height int) string {
 
   Navigation:
     j/k, up/down   Navigate list
-    Tab            Cycle view: info/review/comments
+    Tab            Cycle detail panel view
 
-  Actions:
+  Reviews:
     w              Create worktree for selected PR
     W              Delete worktree (with confirmation)
     c              Start/cancel Claude review (auto-creates worktree)
     t              Open Claude tmux session (auto-creates worktree)
-                     (Ctrl+b d to detach back to Approver)
     A              Approve PR (with confirmation)
     X              Request changes (with reason)
     u              Update branch (merge base into worktree)
+
+  Issues:
+    w              Create worktree for selected issue
+    W              Delete worktree (with confirmation)
+    c              Start Claude tmux session (auto-creates worktree)
+    a              Add issue by number or URL
+    d              Remove manually-tracked issue
+
+  Common:
     o              Open in browser
     R              Refresh
-
-  General:
     ?              Show this help
     q              Quit
     ctrl+c         Force quit
@@ -676,6 +774,10 @@ func (h *home) layoutPanels() {
 
 	h.pr.prList.SetSize(listWidth, panelHeight)
 	h.pr.detail.SetSize(detailWidth, panelHeight)
+
+	h.issues.issueList.SetSize(listWidth, panelHeight)
+	h.issues.detail.SetSize(detailWidth, panelHeight)
+
 	h.menu.SetWidth(h.width)
 	h.errBox.SetWidth(h.width)
 }
@@ -728,6 +830,70 @@ func (h *home) reconcileNotifications() {
 			pr.HasNotification = true
 		}
 	}
+}
+
+func (h *home) reconcileIssueWorktrees() {
+	for i := range h.issues.issueList.Issues {
+		num := h.issues.issueList.Issues[i].Number
+		_, exists := h.issueWorktrees[num]
+		h.issues.issueList.Issues[i].HasWorktree = exists
+		h.issues.issueList.Issues[i].IsCreatingWorktree = h.creatingIssueWorktrees[num]
+	}
+}
+
+func (h *home) addIssueToList(issue gh.Issue) {
+	for i, existing := range h.issues.issueList.Issues {
+		if existing.Number == issue.Number {
+			h.issues.issueList.Issues[i] = issue
+			return
+		}
+	}
+	h.issues.issueList.Issues = append(h.issues.issueList.Issues, issue)
+}
+
+func (h *home) removeIssue(number int) {
+	for i, issue := range h.issues.issueList.Issues {
+		if issue.Number == number {
+			h.issues.issueList.Issues = append(h.issues.issueList.Issues[:i], h.issues.issueList.Issues[i+1:]...)
+			if h.issues.issueList.Selected >= len(h.issues.issueList.Issues) {
+				h.issues.issueList.Selected = max(0, len(h.issues.issueList.Issues)-1)
+			}
+			return
+		}
+	}
+}
+
+func (h *home) startIssueTmux(issueNumber int, wtPath string) tea.Cmd {
+	session, ok := h.issueTmuxSessions[issueNumber]
+	if !ok || !session.Exists() {
+		session = claude.NewIssueTmuxSession(issueNumber, wtPath)
+		if err := session.Create(); err != nil {
+			h.showError(fmt.Sprintf("Failed to create tmux session: %v", err))
+			return clearErrorAfter(3 * time.Second)
+		}
+		h.issueTmuxSessions[issueNumber] = session
+	}
+	return tea.ExecProcess(session.AttachCmd(), func(err error) tea.Msg {
+		if err != nil {
+			return tmuxSessionErrorMsg{err: err}
+		}
+		return nil
+	})
+}
+
+func (h *home) dispatchIssuePending(issueNumber int, wtPath string) tea.Cmd {
+	action := h.pendingIssue
+	h.clearIssuePending()
+	switch action {
+	case pendingIssueTmux:
+		return h.startIssueTmux(issueNumber, wtPath)
+	}
+	return nil
+}
+
+func (h *home) clearIssuePending() {
+	h.pendingIssue = pendingIssueNone
+	h.pendingIssueNum = 0
 }
 
 func (h *home) addPRToList(pr gh.PR) {
@@ -815,6 +981,17 @@ func scanWorktreesCmd(mgr *worktree.Manager) tea.Cmd {
 
 type worktreesScanMsg struct {
 	worktrees map[int]string
+}
+
+type issueWorktreesScanMsg struct {
+	worktrees map[int]string
+}
+
+func scanIssueWorktreesCmd(mgr *worktree.Manager) tea.Cmd {
+	return func() tea.Msg {
+		wts, _ := mgr.ScanIssueWorktrees()
+		return issueWorktreesScanMsg{worktrees: wts}
+	}
 }
 
 func pollTick(intervalSeconds int) tea.Cmd {

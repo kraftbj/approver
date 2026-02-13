@@ -128,6 +128,142 @@ func (m *Manager) ScanExisting() (map[int]string, error) {
 	return result, nil
 }
 
+// IssueBranchName returns the branch name for an issue worktree.
+func IssueBranchName(issueNumber int, title string) string {
+	slug := sanitizeBranch(strings.ToLower(title))
+	return fmt.Sprintf("issue-%d-%s", issueNumber, slug)
+}
+
+// IssueWorktreePath returns the path for an issue's worktree.
+func (m *Manager) IssueWorktreePath(issueNumber int, title string) string {
+	branch := IssueBranchName(issueNumber, title)
+	return filepath.Join(m.BaseDir, branch)
+}
+
+// CreateForIssue creates a worktree for an issue, branching from the default branch.
+func (m *Manager) CreateForIssue(issueNumber int, title string) (string, error) {
+	branch := IssueBranchName(issueNumber, title)
+	path := filepath.Join(m.BaseDir, branch)
+
+	if err := os.MkdirAll(m.BaseDir, 0o755); err != nil {
+		return "", fmt.Errorf("creating worktree directory: %w", err)
+	}
+
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
+	}
+
+	// Determine default branch
+	defaultBranch, err := m.defaultBranch()
+	if err != nil {
+		return "", err
+	}
+
+	// Fetch latest default branch
+	fetchCmd := exec.Command("git", "fetch", "origin", defaultBranch)
+	fetchCmd.Dir = m.RepoDir
+	if out, err := fetchCmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("git fetch failed: %s", string(out))
+	}
+
+	// Create worktree with a new branch from origin/default
+	wtCmd := exec.Command("git", "worktree", "add", "-b", branch, path, fmt.Sprintf("origin/%s", defaultBranch))
+	wtCmd.Dir = m.RepoDir
+	if out, err := wtCmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("git worktree add failed: %s", string(out))
+	}
+
+	return path, nil
+}
+
+// DeleteIssueWorktree removes a worktree for an issue.
+func (m *Manager) DeleteIssueWorktree(issueNumber int) error {
+	entries, err := m.ScanIssueWorktrees()
+	if err != nil {
+		return err
+	}
+
+	path, exists := entries[issueNumber]
+	if !exists {
+		return fmt.Errorf("no worktree found for issue #%d", issueNumber)
+	}
+
+	cmd := exec.Command("git", "worktree", "remove", path, "--force")
+	cmd.Dir = m.RepoDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git worktree remove failed: %s", string(out))
+	}
+
+	return nil
+}
+
+// ScanIssueWorktrees lists all approver-managed issue worktrees.
+func (m *Manager) ScanIssueWorktrees() (map[int]string, error) {
+	result := make(map[int]string)
+
+	cmd := exec.Command("git", "worktree", "list", "--porcelain")
+	cmd.Dir = m.RepoDir
+	out, err := cmd.Output()
+	if err != nil {
+		return result, nil
+	}
+
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
+		if !strings.HasPrefix(line, "worktree ") {
+			continue
+		}
+		path := strings.TrimPrefix(line, "worktree ")
+
+		if !strings.HasPrefix(path, m.BaseDir) {
+			continue
+		}
+
+		base := filepath.Base(path)
+		issueNum := extractIssueNumber(base)
+		if issueNum > 0 {
+			result[issueNum] = path
+		}
+	}
+
+	return result, nil
+}
+
+// defaultBranch returns the default branch name (e.g., "main" or "master").
+func (m *Manager) defaultBranch() (string, error) {
+	cmd := exec.Command("git", "symbolic-ref", "refs/remotes/origin/HEAD", "--short")
+	cmd.Dir = m.RepoDir
+	out, err := cmd.Output()
+	if err != nil {
+		// Fallback: try "main", then "master"
+		for _, branch := range []string{"main", "master"} {
+			check := exec.Command("git", "rev-parse", "--verify", fmt.Sprintf("origin/%s", branch))
+			check.Dir = m.RepoDir
+			if check.Run() == nil {
+				return branch, nil
+			}
+		}
+		return "", fmt.Errorf("could not determine default branch")
+	}
+	// Output is like "origin/main" — strip the "origin/" prefix
+	branch := strings.TrimSpace(string(out))
+	branch = strings.TrimPrefix(branch, "origin/")
+	return branch, nil
+}
+
+// issueNumberRegex matches "issue-{number}-" prefix.
+var issueNumberRegex = regexp.MustCompile(`^issue-(\d+)-`)
+
+// extractIssueNumber extracts the issue number from a worktree directory name.
+func extractIssueNumber(dirName string) int {
+	matches := issueNumberRegex.FindStringSubmatch(dirName)
+	if len(matches) < 2 {
+		return 0
+	}
+	n, _ := strconv.Atoi(matches[1])
+	return n
+}
+
 // prNumberRegex matches "pr-{number}-" prefix.
 var prNumberRegex = regexp.MustCompile(`^pr-(\d+)-`)
 

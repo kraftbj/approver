@@ -25,6 +25,14 @@ func NewTmuxSession(prNumber int, worktreePath string) *TmuxSession {
 	}
 }
 
+// NewIssueTmuxSession creates a TmuxSession for the given issue.
+func NewIssueTmuxSession(issueNumber int, worktreePath string) *TmuxSession {
+	return &TmuxSession{
+		Name:         fmt.Sprintf("approver-issue-%d", issueNumber),
+		WorktreePath: worktreePath,
+	}
+}
+
 // Create starts a new detached tmux session running claude in the worktree.
 func (s *TmuxSession) Create() error {
 	cmd := exec.Command("tmux", "new-session", "-d", "-s", s.Name, "-c", s.WorktreePath, "claude")

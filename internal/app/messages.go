@@ -149,3 +149,42 @@ type setupErrorMsg struct {
 	err      error
 }
 
+// Issue screen messages
+
+// issuesLoadedMsg is sent when issues have been fetched from GitHub.
+type issuesLoadedMsg struct {
+	issues []gh.Issue
+}
+
+// issuesErrorMsg is sent when fetching issues fails.
+type issuesErrorMsg struct {
+	err error
+}
+
+// issueAddedMsg is sent when a single issue is fetched for manual tracking.
+type issueAddedMsg struct {
+	issue gh.Issue
+}
+
+// issueAddErrorMsg is sent when adding a manual issue fails.
+type issueAddErrorMsg struct {
+	err error
+}
+
+// issueWorktreeCreatedMsg is sent after an issue worktree is created.
+type issueWorktreeCreatedMsg struct {
+	issueNumber int
+	path        string
+}
+
+// issueWorktreeDeletedMsg is sent after an issue worktree is deleted.
+type issueWorktreeDeletedMsg struct {
+	issueNumber int
+}
+
+// issueWorktreeErrorMsg is sent when an issue worktree operation fails.
+type issueWorktreeErrorMsg struct {
+	issueNumber int
+	err         error
+}
+
