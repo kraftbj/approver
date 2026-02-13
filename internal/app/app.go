@@ -601,6 +601,11 @@ func Run() error {
 		return fmt.Errorf("getting working directory: %w", err)
 	}
 
+	if err := gh.CheckGitRepo(repoDir); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
 	h := newHome()
 	h.repoDir = repoDir
 	h.wtManager = worktree.NewManager(repoDir)

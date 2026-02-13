@@ -90,6 +90,18 @@ func CheckGH() error {
 	return nil
 }
 
+// CheckGitRepo verifies the given directory is inside a git repository.
+func CheckGitRepo(dir string) error {
+	cmd := exec.Command("git", "rev-parse", "--git-dir")
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("not a git repository. Run approver from within a git repo")
+	}
+	return nil
+}
+
 // ParseRepoFromDir extracts the repo owner/name from a git directory.
 func ParseRepoFromDir(dir string) (string, error) {
 	cmd := exec.Command("git", "remote", "get-url", "origin")
