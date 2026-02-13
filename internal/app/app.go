@@ -277,6 +277,10 @@ func (h *home) handleDefaultKey(key string) tea.Cmd {
 			h.showError("Create worktree first (w)")
 			return clearErrorAfter(3 * time.Second)
 		}
+		if pr.Mergeable == "CONFLICTING" {
+			h.showError("Cannot update: PR has conflicts with base branch")
+			return clearErrorAfter(3 * time.Second)
+		}
 		baseBranch := pr.BaseRefName
 		if baseBranch == "" {
 			baseBranch = h.defaultBranch

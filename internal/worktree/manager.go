@@ -56,11 +56,16 @@ func (m *Manager) Create(prNumber int, branch string) (string, error) {
 		return "", fmt.Errorf("git fetch failed: %s", string(out))
 	}
 
-	// Create the worktree
-	wtCmd := exec.Command("git", "worktree", "add", path, fmt.Sprintf("origin/%s", branch))
+	// Create the worktree with a local branch tracking the remote
+	wtCmd := exec.Command("git", "worktree", "add", "-b", branch, path, fmt.Sprintf("origin/%s", branch))
 	wtCmd.Dir = m.RepoDir
 	if out, err := wtCmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("git worktree add failed: %s", string(out))
+		// Branch may already exist locally — try without -b
+		wtCmd2 := exec.Command("git", "worktree", "add", path, branch)
+		wtCmd2.Dir = m.RepoDir
+		if out2, err2 := wtCmd2.CombinedOutput(); err2 != nil {
+			return "", fmt.Errorf("git worktree add failed: %s\n%s", string(out), string(out2))
+		}
 	}
 
 	return path, nil

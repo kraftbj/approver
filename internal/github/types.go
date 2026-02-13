@@ -12,6 +12,7 @@ type PR struct {
 	Author         Author         `json:"author"`
 	HeadRefName    string         `json:"headRefName"`
 	BaseRefName    string         `json:"baseRefName"`
+	Mergeable      string         `json:"mergeable"`
 	URL            string         `json:"url"`
 	ReviewDecision string         `json:"reviewDecision"`
 	StatusChecks   StatusChecks   `json:"statusCheckRollup"`
