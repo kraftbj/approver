@@ -218,8 +218,8 @@ func (h *home) handleDefaultKey(key string) tea.Cmd {
 
 	case "o":
 		pr := h.prList.SelectedPR()
-		if pr != nil {
-			return openInBrowserCmd(pr.Number, h.repoDir)
+		if pr != nil && pr.URL != "" {
+			return openInBrowserCmd(pr.URL)
 		}
 
 	case "w":
@@ -530,15 +530,11 @@ func clearErrorAfter(d time.Duration) tea.Cmd {
 	})
 }
 
-func openInBrowserCmd(prNumber int, repoDir string) tea.Cmd {
+func openInBrowserCmd(url string) tea.Cmd {
 	return func() tea.Msg {
-		cmd := exec.Command("gh", "pr", "view", fmt.Sprintf("%d", prNumber), "--web")
-		if repoDir != "" {
-			cmd.Dir = repoDir
-		}
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		cmd.Run()
+		// Use macOS "open" directly - gh pr view --web doesn't work
+		// inside alt screen since Bubble Tea owns stdout/stderr.
+		exec.Command("open", url).Run()
 		return nil
 	}
 }
