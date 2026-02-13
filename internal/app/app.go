@@ -106,6 +106,15 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.state = stateDefault
 		h.prList.SetPRs(msg.prs)
 		h.reconcileWorktrees()
+		// Also fetch tracked PRs to merge in
+		cmds = append(cmds, fetchTrackedPRsCmd(h.repoDir))
+
+	case trackedPRsLoadedMsg:
+		// Merge tracked PRs into the list (dedup by number)
+		for _, pr := range msg.prs {
+			h.addPRToList(pr)
+		}
+		h.reconcileWorktrees()
 
 	case prsErrorMsg:
 		h.loading = false
@@ -132,6 +141,8 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.addPRToList(msg.pr)
 		h.state = stateDefault
 		h.inputBuffer = ""
+		// Persist the tracked PR
+		addTrackedPR(msg.pr.Number)
 
 	case prAddErrorMsg:
 		h.state = stateDefault
@@ -536,9 +547,9 @@ func deleteWorktreeCmd(prNumber int, repoDir string) tea.Cmd {
 	}
 }
 
-// Tracked PR command stub - will be implemented in Task 5b
 func removeTrackedPRCmd(prNumber int) tea.Cmd {
 	return func() tea.Msg {
+		removeTrackedPR(prNumber)
 		return nil
 	}
 }
