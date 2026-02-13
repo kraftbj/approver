@@ -40,6 +40,9 @@ type PR struct {
 
 	// HasTmux is set at runtime when a tmux Claude session exists.
 	HasTmux bool `json:"-"`
+
+	// IsCreatingWorktree is set at runtime while a worktree is being created.
+	IsCreatingWorktree bool `json:"-"`
 }
 
 type Author struct {

@@ -17,15 +17,16 @@
 
 ## Bugs
 
-- **Review panel hint misleading without worktree** - "Press c to start a review" shows even when no worktree exists, but `c` then errors asking to press `w` first. Should say "Press w to create a worktree, then c to review."
+- ~~**Review panel hint misleading without worktree**~~ [DONE] - Shows "press w to create a worktree first" when no worktree exists
 
 ## Enhancements
 
-- **Auto-create worktree on demand** - When pressing `c` or `t` without a worktree, automatically create one instead of requiring `w` first
-- **Worktree creation spinner** - Show a progress indicator while a worktree is being created (fetch + checkout can be slow)
-- **Approve from the app** - Submit PR approval (and possibly request-changes/comment) directly from the TUI without opening a browser
-- **Per-repo setup commands** - Config option to specify a command to run in each worktree after creation (e.g. `npm install`, `docker compose up`, `make dev`) to spin up local dev environments
-- **Tmux detach hint** - Show a brief "Ctrl+b d to return" message before entering tmux, or display it in the tmux status bar
+- ~~**Auto-create worktree on demand**~~ [DONE] - `c` and `t` auto-create worktrees, then dispatch the pending action
+- ~~**Worktree creation spinner**~~ [DONE] - `W` indicator in PR list, "creating..." in detail panel, spinner while creating
+- ~~**Approve from the app**~~ [DONE] - `A` key approves with confirmation dialog via `gh pr review --approve`
+- ~~**Per-repo setup commands**~~ [DONE] - `repos` config map with `setup_command`, runs after worktree creation
+- ~~**Tmux detach hint**~~ [DONE] - tmux status bar shows "Ctrl+b d: back to Approver"
+- ~~**Fun review spinner**~~ [DONE] - Rotates through playful messages every 4 seconds during review
 
 ## Phase 3: GitHub Feedback Loop
 

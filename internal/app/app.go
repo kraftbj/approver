@@ -41,6 +41,16 @@ type confirmAction int
 const (
 	confirmNone confirmAction = iota
 	confirmDeleteWorktree
+	confirmApprove
+)
+
+// pendingAction tracks an action deferred until worktree creation completes.
+type pendingAction int
+
+const (
+	pendingNone pendingAction = iota
+	pendingReview
+	pendingTmux
 )
 
 type home struct {
@@ -84,6 +94,16 @@ type home struct {
 	// tmux session state
 	tmuxSessions map[int]*claude.TmuxSession
 
+	// Worktree creation in-progress tracking
+	creatingWorktrees map[int]bool
+
+	// Pending action (deferred until worktree creation completes)
+	pending   pendingAction
+	pendingPR int
+
+	// Fun review spinner rotation
+	reviewMsgIdx int
+
 	// Config
 	cfg *config.Config
 }
@@ -105,7 +125,8 @@ func newHome() home {
 		reviews:      make(map[int]claude.ReviewResult),
 		reviewing:    make(map[int]context.CancelFunc),
 		reviewStep:   make(map[int]string),
-		tmuxSessions: make(map[int]*claude.TmuxSession),
+		tmuxSessions:      make(map[int]*claude.TmuxSession),
+		creatingWorktrees: make(map[int]bool),
 	}
 }
 
@@ -129,7 +150,7 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, nil
 
 	case spinner.TickMsg:
-		if h.loading || len(h.reviewing) > 0 {
+		if h.loading || len(h.reviewing) > 0 || len(h.creatingWorktrees) > 0 {
 			var cmd tea.Cmd
 			h.spinner, cmd = h.spinner.Update(msg)
 			cmds = append(cmds, cmd)
@@ -161,7 +182,20 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case worktreeCreatedMsg:
 		h.worktrees[msg.prNumber] = msg.path
+		delete(h.creatingWorktrees, msg.prNumber)
 		h.reconcileWorktrees()
+		// Check if per-repo setup is configured
+		if setupCmd := h.repoSetupCommand(); setupCmd != "" && h.pending != pendingNone && h.pendingPR == msg.prNumber {
+			cmds = append(cmds, runSetupCmd(msg.path, setupCmd, msg.prNumber))
+			return h, tea.Batch(cmds...)
+		}
+		// Dispatch any pending action
+		if h.pending != pendingNone && h.pendingPR == msg.prNumber {
+			cmd := h.dispatchPending(msg.prNumber, msg.path)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
 
 	case worktreeDeletedMsg:
 		delete(h.worktrees, msg.prNumber)
@@ -172,6 +206,11 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.reconcileWorktrees()
 
 	case worktreeErrorMsg:
+		if msg.prNumber != 0 {
+			delete(h.creatingWorktrees, msg.prNumber)
+			h.reconcileWorktrees()
+		}
+		h.clearPending()
 		h.showError(fmt.Sprintf("Worktree error: %v", msg.err))
 		cmds = append(cmds, clearErrorAfter(3*time.Second))
 
@@ -207,6 +246,38 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tmuxSessionErrorMsg:
 		h.showError(fmt.Sprintf("tmux error: %v", msg.err))
 		cmds = append(cmds, clearErrorAfter(3*time.Second))
+
+	case reviewSpinnerTickMsg:
+		if len(h.reviewing) > 0 {
+			h.reviewMsgIdx++
+			msg := funReviewMessages[h.reviewMsgIdx%len(funReviewMessages)]
+			for prNum := range h.reviewing {
+				h.reviewStep[prNum] = msg
+			}
+			cmds = append(cmds, reviewSpinnerTick())
+		}
+
+	case prApprovedMsg:
+		h.showError(fmt.Sprintf("PR #%d approved", msg.prNumber))
+		cmds = append(cmds, clearErrorAfter(3*time.Second))
+		cmds = append(cmds, fetchSinglePRCmd(h.repoDir, fmt.Sprintf("%d", msg.prNumber)))
+
+	case prApproveErrorMsg:
+		h.showError(fmt.Sprintf("Failed to approve PR #%d: %v", msg.prNumber, msg.err))
+		cmds = append(cmds, clearErrorAfter(5*time.Second))
+
+	case setupDoneMsg:
+		if h.pending != pendingNone && h.pendingPR == msg.prNumber {
+			cmd := h.dispatchPending(msg.prNumber, msg.wtPath)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+
+	case setupErrorMsg:
+		h.clearPending()
+		h.showError(fmt.Sprintf("Setup failed for PR #%d: %v", msg.prNumber, msg.err))
+		cmds = append(cmds, clearErrorAfter(5*time.Second))
 
 	case tea.KeyMsg:
 		cmd := h.handleKey(msg)
@@ -278,7 +349,12 @@ func (h *home) handleDefaultKey(key string) tea.Cmd {
 				h.showError(fmt.Sprintf("Worktree already exists for PR #%d", pr.Number))
 				return clearErrorAfter(3 * time.Second)
 			}
-			return createWorktreeCmd(h.wtManager, pr.Number, pr.HeadRefName)
+			if h.creatingWorktrees[pr.Number] {
+				return nil
+			}
+			h.creatingWorktrees[pr.Number] = true
+			h.reconcileWorktrees()
+			return tea.Batch(h.spinner.Tick, createWorktreeCmd(h.wtManager, pr.Number, pr.HeadRefName))
 		}
 
 	case "W":
@@ -324,11 +400,6 @@ func (h *home) handleDefaultKey(key string) tea.Cmd {
 			h.showError("claude CLI not found on PATH")
 			return clearErrorAfter(3 * time.Second)
 		}
-		wtPath, exists := h.worktrees[pr.Number]
-		if !exists {
-			h.showError(fmt.Sprintf("No worktree for PR #%d — press w first", pr.Number))
-			return clearErrorAfter(3 * time.Second)
-		}
 		// If already reviewing, cancel
 		if cancel, running := h.reviewing[pr.Number]; running {
 			cancel()
@@ -337,16 +408,18 @@ func (h *home) handleDefaultKey(key string) tea.Cmd {
 			h.reconcileClaudeState()
 			return nil
 		}
-		// Start review pipeline
-		h.detailMode = detailReview
-		ctx, cancel := context.WithCancel(context.Background())
-		h.reviewing[pr.Number] = cancel
-		h.reviewStep[pr.Number] = "Starting review..."
-		h.reconcileClaudeState()
-		return tea.Batch(
-			h.spinner.Tick,
-			runClaudeReviewCmd(ctx, h.cfg, pr.Number, wtPath, h.repoDir),
-		)
+		wtPath, exists := h.worktrees[pr.Number]
+		if !exists {
+			if h.creatingWorktrees[pr.Number] {
+				return nil
+			}
+			h.pending = pendingReview
+			h.pendingPR = pr.Number
+			h.creatingWorktrees[pr.Number] = true
+			h.reconcileWorktrees()
+			return tea.Batch(h.spinner.Tick, createWorktreeCmd(h.wtManager, pr.Number, pr.HeadRefName))
+		}
+		return h.startReview(pr.Number, wtPath)
 
 	case "t":
 		pr := h.prList.SelectedPR()
@@ -363,27 +436,24 @@ func (h *home) handleDefaultKey(key string) tea.Cmd {
 		}
 		wtPath, exists := h.worktrees[pr.Number]
 		if !exists {
-			h.showError(fmt.Sprintf("No worktree for PR #%d — press w first", pr.Number))
-			return clearErrorAfter(3 * time.Second)
-		}
-		// Create or reuse session
-		session, ok := h.tmuxSessions[pr.Number]
-		if !ok || !session.Exists() {
-			session = claude.NewTmuxSession(pr.Number, wtPath)
-			if err := session.Create(); err != nil {
-				h.showError(fmt.Sprintf("Failed to create tmux session: %v", err))
-				return clearErrorAfter(3 * time.Second)
+			if h.creatingWorktrees[pr.Number] {
+				return nil
 			}
-			h.tmuxSessions[pr.Number] = session
-			h.reconcileClaudeState()
+			h.pending = pendingTmux
+			h.pendingPR = pr.Number
+			h.creatingWorktrees[pr.Number] = true
+			h.reconcileWorktrees()
+			return tea.Batch(h.spinner.Tick, createWorktreeCmd(h.wtManager, pr.Number, pr.HeadRefName))
 		}
-		// Hand off terminal to tmux
-		return tea.ExecProcess(session.AttachCmd(), func(err error) tea.Msg {
-			if err != nil {
-				return tmuxSessionErrorMsg{err: err}
-			}
-			return nil
-		})
+		return h.startTmux(pr.Number, wtPath)
+
+	case "A":
+		pr := h.prList.SelectedPR()
+		if pr != nil {
+			h.state = stateConfirm
+			h.confirmAction = confirmApprove
+			h.confirmMsg = fmt.Sprintf("Approve PR #%d? (y/n)", pr.Number)
+		}
 
 	case "?":
 		h.state = stateHelp
@@ -396,10 +466,18 @@ func (h *home) handleConfirmKey(key string) tea.Cmd {
 	switch key {
 	case "y":
 		h.state = stateDefault
-		if h.confirmAction == confirmDeleteWorktree {
+		action := h.confirmAction
+		h.confirmAction = confirmNone
+		switch action {
+		case confirmDeleteWorktree:
 			pr := h.prList.SelectedPR()
 			if pr != nil {
 				return deleteWorktreeCmd(h.wtManager, pr.Number)
+			}
+		case confirmApprove:
+			pr := h.prList.SelectedPR()
+			if pr != nil {
+				return approvePRCmd(h.repoDir, pr.Number)
 			}
 		}
 	case "n", "esc":
@@ -508,6 +586,7 @@ func (h *home) viewDashboard(height int) string {
 
 	if h.detailMode == detailReview {
 		if pr != nil {
+			_, hasWT := h.worktrees[pr.Number]
 			if _, reviewing := h.reviewing[pr.Number]; reviewing {
 				step := h.reviewStep[pr.Number]
 				detailView = h.detail.ViewReviewing(pr, h.spinner.View(), step)
@@ -518,12 +597,12 @@ func (h *home) viewDashboard(height int) string {
 					IssueCount: review.IssueCount(),
 					HighCount:  review.HighSeverityCount(),
 				}
-				detailView = h.detail.ViewReview(pr, data)
+				detailView = h.detail.ViewReview(pr, data, hasWT)
 			} else {
-				detailView = h.detail.ViewReview(pr, nil)
+				detailView = h.detail.ViewReview(pr, nil, hasWT)
 			}
 		} else {
-			detailView = h.detail.ViewReview(nil, nil)
+			detailView = h.detail.ViewReview(nil, nil, false)
 		}
 	} else {
 		detailView = h.detail.View(pr)
@@ -555,9 +634,10 @@ func (h *home) viewHelp(height int) string {
   Actions:
     w              Create worktree for selected PR
     W              Delete worktree (with confirmation)
-    c              Start/cancel Claude review
-    t              Open Claude tmux session
+    c              Start/cancel Claude review (auto-creates worktree)
+    t              Open Claude tmux session (auto-creates worktree)
                      (Ctrl+b d to detach back to Approver)
+    A              Approve PR (with confirmation)
     o              Open PR in browser
     R              Refresh PR list
 
@@ -629,8 +709,10 @@ func (h *home) showError(msg string) {
 
 func (h *home) reconcileWorktrees() {
 	for i := range h.prList.PRs {
-		_, exists := h.worktrees[h.prList.PRs[i].Number]
+		num := h.prList.PRs[i].Number
+		_, exists := h.worktrees[num]
 		h.prList.PRs[i].HasWorktree = exists
+		h.prList.PRs[i].IsCreatingWorktree = h.creatingWorktrees[num]
 	}
 }
 
@@ -710,7 +792,7 @@ func createWorktreeCmd(mgr *worktree.Manager, prNumber int, branch string) tea.C
 	return func() tea.Msg {
 		path, err := mgr.Create(prNumber, branch)
 		if err != nil {
-			return worktreeErrorMsg{err: err}
+			return worktreeErrorMsg{prNumber: prNumber, err: err}
 		}
 		return worktreeCreatedMsg{prNumber: prNumber, path: path}
 	}
@@ -719,7 +801,7 @@ func createWorktreeCmd(mgr *worktree.Manager, prNumber int, branch string) tea.C
 func deleteWorktreeCmd(mgr *worktree.Manager, prNumber int) tea.Cmd {
 	return func() tea.Msg {
 		if err := mgr.Delete(prNumber); err != nil {
-			return worktreeErrorMsg{err: err}
+			return worktreeErrorMsg{prNumber: prNumber, err: err}
 		}
 		return worktreeDeletedMsg{prNumber: prNumber}
 	}
@@ -757,6 +839,118 @@ func runClaudeReviewCmd(ctx context.Context, cfg *config.Config, prNumber int, w
 			return claudeReviewErrorMsg{prNumber: prNumber, err: err}
 		}
 		return claudeReviewDoneMsg{prNumber: prNumber, review: *result}
+	}
+}
+
+// Fun review spinner messages, rotated every 4 seconds during review.
+var funReviewMessages = []string{
+	"Reading the diff with fresh eyes...",
+	"Checking for off-by-one errors...",
+	"Looking for forgotten TODOs...",
+	"Sniffing out race conditions...",
+	"Pondering variable names...",
+	"Hunting for edge cases...",
+	"Scrutinizing error handling...",
+	"Questioning every nil check...",
+	"Considering the blast radius...",
+	"Almost there, double-checking...",
+}
+
+// startReview begins the Claude review pipeline for a PR.
+func (h *home) startReview(prNumber int, wtPath string) tea.Cmd {
+	h.detailMode = detailReview
+	ctx, cancel := context.WithCancel(context.Background())
+	h.reviewing[prNumber] = cancel
+	h.reviewStep[prNumber] = funReviewMessages[0]
+	h.reviewMsgIdx = 0
+	h.reconcileClaudeState()
+	return tea.Batch(
+		h.spinner.Tick,
+		runClaudeReviewCmd(ctx, h.cfg, prNumber, wtPath, h.repoDir),
+		reviewSpinnerTick(),
+	)
+}
+
+// startTmux creates/reuses a tmux session and hands off the terminal.
+func (h *home) startTmux(prNumber int, wtPath string) tea.Cmd {
+	session, ok := h.tmuxSessions[prNumber]
+	if !ok || !session.Exists() {
+		session = claude.NewTmuxSession(prNumber, wtPath)
+		if err := session.Create(); err != nil {
+			h.showError(fmt.Sprintf("Failed to create tmux session: %v", err))
+			return clearErrorAfter(3 * time.Second)
+		}
+		h.tmuxSessions[prNumber] = session
+		h.reconcileClaudeState()
+	}
+	return tea.ExecProcess(session.AttachCmd(), func(err error) tea.Msg {
+		if err != nil {
+			return tmuxSessionErrorMsg{err: err}
+		}
+		return nil
+	})
+}
+
+// dispatchPending fires the deferred action after worktree/setup completes.
+func (h *home) dispatchPending(prNumber int, wtPath string) tea.Cmd {
+	action := h.pending
+	h.clearPending()
+	switch action {
+	case pendingReview:
+		return h.startReview(prNumber, wtPath)
+	case pendingTmux:
+		return h.startTmux(prNumber, wtPath)
+	}
+	return nil
+}
+
+// clearPending resets the pending action state.
+func (h *home) clearPending() {
+	h.pending = pendingNone
+	h.pendingPR = 0
+}
+
+// repoSetupCommand returns the per-repo setup command if configured.
+func (h *home) repoSetupCommand() string {
+	if h.cfg == nil {
+		return ""
+	}
+	remoteURL, err := gh.ParseRepoFromDir(h.repoDir)
+	if err != nil {
+		return ""
+	}
+	return h.cfg.RepoSetupCommand(remoteURL)
+}
+
+func reviewSpinnerTick() tea.Cmd {
+	return tea.Tick(4*time.Second, func(time.Time) tea.Msg {
+		return reviewSpinnerTickMsg{}
+	})
+}
+
+func approvePRCmd(repoDir string, prNumber int) tea.Cmd {
+	return func() tea.Msg {
+		cmd := exec.Command("gh", "pr", "review", fmt.Sprintf("%d", prNumber), "--approve")
+		if repoDir != "" {
+			cmd.Dir = repoDir
+		}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return prApproveErrorMsg{prNumber: prNumber, err: fmt.Errorf("%s", string(out))}
+		}
+		return prApprovedMsg{prNumber: prNumber}
+	}
+}
+
+func runSetupCmd(wtPath, setupCommand string, prNumber int) tea.Cmd {
+	return func() tea.Msg {
+		cmd := exec.Command("sh", "-c", setupCommand)
+		cmd.Dir = wtPath
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return setupErrorMsg{prNumber: prNumber, err: fmt.Errorf("%s: %s", err, string(out))}
+		}
+		return setupDoneMsg{prNumber: prNumber, wtPath: wtPath}
 	}
 }
 

@@ -33,7 +33,8 @@ type worktreeDeletedMsg struct {
 
 // worktreeErrorMsg is sent when a worktree operation fails.
 type worktreeErrorMsg struct {
-	err error
+	prNumber int
+	err      error
 }
 
 // prAddedMsg is sent when a single PR is fetched for manual tracking.
@@ -67,5 +68,31 @@ type claudeReviewProgressMsg struct {
 // tmuxSessionErrorMsg is sent when a tmux operation fails.
 type tmuxSessionErrorMsg struct {
 	err error
+}
+
+// reviewSpinnerTickMsg rotates the fun review spinner messages.
+type reviewSpinnerTickMsg struct{}
+
+// prApprovedMsg is sent when a PR is successfully approved.
+type prApprovedMsg struct {
+	prNumber int
+}
+
+// prApproveErrorMsg is sent when approving a PR fails.
+type prApproveErrorMsg struct {
+	prNumber int
+	err      error
+}
+
+// setupDoneMsg is sent when a per-repo setup command completes.
+type setupDoneMsg struct {
+	prNumber int
+	wtPath   string
+}
+
+// setupErrorMsg is sent when a per-repo setup command fails.
+type setupErrorMsg struct {
+	prNumber int
+	err      error
 }
 

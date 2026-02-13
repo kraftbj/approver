@@ -141,6 +141,8 @@ func (d *PRDetail) View(pr *gh.PR) string {
 	// Worktree status
 	if pr.HasWorktree {
 		sections = append(sections, CIStyle("pass").Render("  Worktree: active"))
+	} else if pr.IsCreatingWorktree {
+		sections = append(sections, CIStyle("pending").Render("  Worktree: creating..."))
 	} else {
 		sections = append(sections, DimStyle.Render("  Worktree: none"))
 	}
@@ -160,7 +162,7 @@ type ReviewDisplayData struct {
 }
 
 // ViewReview renders the review results panel.
-func (d *PRDetail) ViewReview(pr *gh.PR, review *ReviewDisplayData) string {
+func (d *PRDetail) ViewReview(pr *gh.PR, review *ReviewDisplayData, hasWorktree bool) string {
 	if pr == nil {
 		content := DimStyle.Render("No PR selected")
 		return DetailPanelStyle.Width(d.Width).Height(d.Height).Render(content)
@@ -172,7 +174,11 @@ func (d *PRDetail) ViewReview(pr *gh.PR, review *ReviewDisplayData) string {
 	sections = append(sections, "")
 
 	if review == nil {
-		sections = append(sections, DimStyle.Render("  No review available. Press c to start a review."))
+		if hasWorktree {
+			sections = append(sections, DimStyle.Render("  No review available. Press c to start a review."))
+		} else {
+			sections = append(sections, DimStyle.Render("  No review available. Press w to create a worktree first."))
+		}
 		content := strings.Join(sections, "\n")
 		return DetailPanelStyle.Width(d.Width).Height(d.Height).Render(content)
 	}

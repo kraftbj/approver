@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -23,6 +24,29 @@ type Config struct {
 
 	// AllowedTools is the set of tools review agents can use (default: "Read,Glob,Grep").
 	AllowedTools string `yaml:"allowed_tools,omitempty"`
+
+	// Repos holds per-repository configuration keyed by a substring of the remote URL.
+	Repos map[string]RepoConfig `yaml:"repos,omitempty"`
+}
+
+// RepoConfig holds configuration for a specific repository.
+type RepoConfig struct {
+	// SetupCommand is run in the worktree after creation (e.g. "npm install").
+	SetupCommand string `yaml:"setup_command,omitempty"`
+}
+
+// RepoSetupCommand returns the setup command for a repo whose remote URL
+// contains the given repoURL substring. Returns empty string if none match.
+func (c *Config) RepoSetupCommand(repoURL string) string {
+	if c == nil || len(c.Repos) == 0 || repoURL == "" {
+		return ""
+	}
+	for pattern, rc := range c.Repos {
+		if strings.Contains(repoURL, pattern) {
+			return rc.SetupCommand
+		}
+	}
+	return ""
 }
 
 // DefaultConfig returns a Config with sensible defaults.

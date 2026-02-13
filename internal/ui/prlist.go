@@ -133,6 +133,9 @@ func (l *PRList) renderPRItem(pr gh.PR, selected bool, width int) (string, strin
 	if pr.HasTmux {
 		prefix += ManualBadgeStyle.Render("T")
 	}
+	if pr.IsCreatingWorktree {
+		prefix += CIStyle("pending").Render("W")
+	}
 
 	numberStr := fmt.Sprintf("#%d", pr.Number)
 	titleWidth := width - len(indicator) - len(numberStr) - len(prefix) - 2

@@ -32,6 +32,8 @@ func (s *TmuxSession) Create() error {
 	if err != nil {
 		return fmt.Errorf("tmux new-session failed: %s", string(out))
 	}
+	// Best-effort: set status bar hint for returning to Approver
+	exec.Command("tmux", "set-option", "-t", s.Name, "status-right", " Ctrl+b d: back to Approver ").Run()
 	return nil
 }
 
