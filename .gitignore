@@ -19,3 +19,6 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# Override global ignore
+!agent-os/
