@@ -62,8 +62,6 @@ type home struct {
 	// Worktree manager
 	wtManager *worktree.Manager
 
-	// Default branch for the repo (e.g., "main", "trunk")
-	defaultBranch string
 }
 
 func newHome() home {
@@ -88,7 +86,6 @@ func (h home) Init() tea.Cmd {
 		h.spinner.Tick,
 		fetchPRsCmd(h.repoDir),
 		scanWorktreesCmd(h.wtManager),
-		detectDefaultBranchCmd(h.repoDir),
 	)
 }
 
@@ -162,21 +159,6 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.inputBuffer = ""
 		h.showError(fmt.Sprintf("Failed to add PR: %v", msg.err))
 		cmds = append(cmds, clearErrorAfter(3*time.Second))
-
-	case defaultBranchMsg:
-		h.defaultBranch = msg.branch
-		cmds = append(cmds, backgroundFetchCmd(h.repoDir, msg.branch))
-
-	case trunkFetchedMsg:
-		// Background fetch complete, nothing to do
-
-	case branchUpdatedMsg:
-		h.showError(fmt.Sprintf("PR #%d updated with %s", msg.prNumber, h.defaultBranch))
-		cmds = append(cmds, clearErrorAfter(3*time.Second))
-
-	case branchUpdateErrorMsg:
-		h.showError(fmt.Sprintf("Update failed: %v", msg.err))
-		cmds = append(cmds, clearErrorAfter(5*time.Second))
 
 	case tea.KeyMsg:
 		cmd := h.handleKey(msg)
@@ -267,28 +249,6 @@ func (h *home) handleDefaultKey(key string) tea.Cmd {
 		h.state = stateInput
 		h.inputPrompt = "Add PR (number or URL): "
 		h.inputBuffer = ""
-
-	case "u":
-		pr := h.prList.SelectedPR()
-		if pr == nil {
-			return nil
-		}
-		if _, exists := h.worktrees[pr.Number]; !exists {
-			h.showError("Create worktree first (w)")
-			return clearErrorAfter(3 * time.Second)
-		}
-		if pr.Mergeable == "CONFLICTING" {
-			h.showError("Cannot update: PR has conflicts with base branch")
-			return clearErrorAfter(3 * time.Second)
-		}
-		baseBranch := pr.BaseRefName
-		if baseBranch == "" {
-			baseBranch = h.defaultBranch
-		}
-		if baseBranch == "" {
-			baseBranch = "main"
-		}
-		return updateBranchCmd(h.wtManager, pr.Number, baseBranch)
 
 	case "d":
 		pr := h.prList.SelectedPR()
@@ -444,7 +404,6 @@ func (h *home) viewHelp(height int) string {
   Actions:
     w              Create worktree for selected PR
     W              Delete worktree (with confirmation)
-    u              Update branch (merge trunk + push)
     o              Open PR in browser
     R              Refresh PR list
 
@@ -610,31 +569,6 @@ func scanWorktreesCmd(mgr *worktree.Manager) tea.Cmd {
 // worktreesScanMsg carries the initial worktree scan results.
 type worktreesScanMsg struct {
 	worktrees map[int]string
-}
-
-func detectDefaultBranchCmd(repoDir string) tea.Cmd {
-	return func() tea.Msg {
-		branch, _ := gh.DetectDefaultBranch(repoDir)
-		return defaultBranchMsg{branch: branch}
-	}
-}
-
-func backgroundFetchCmd(repoDir, branch string) tea.Cmd {
-	return func() tea.Msg {
-		cmd := exec.Command("git", "fetch", "origin", branch)
-		cmd.Dir = repoDir
-		cmd.Run()
-		return trunkFetchedMsg{}
-	}
-}
-
-func updateBranchCmd(mgr *worktree.Manager, prNumber int, baseBranch string) tea.Cmd {
-	return func() tea.Msg {
-		if err := mgr.UpdateBranch(prNumber, baseBranch); err != nil {
-			return branchUpdateErrorMsg{err: err}
-		}
-		return branchUpdatedMsg{prNumber: prNumber}
-	}
 }
 
 func removeTrackedPRCmd(prNumber int) tea.Cmd {

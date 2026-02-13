@@ -104,23 +104,6 @@ func CheckGitRepo(dir string) error {
 	return nil
 }
 
-// DetectDefaultBranch returns the default branch name for the repo (e.g., "main", "trunk").
-func DetectDefaultBranch(repoDir string) (string, error) {
-	cmd := exec.Command("gh", "repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name")
-	if repoDir != "" {
-		cmd.Dir = repoDir
-	}
-	out, err := cmd.Output()
-	if err != nil {
-		return "main", nil // fallback
-	}
-	branch := strings.TrimSpace(string(out))
-	if branch == "" {
-		return "main", nil
-	}
-	return branch, nil
-}
-
 // ParseRepoFromDir extracts the repo owner/name from a git directory.
 func ParseRepoFromDir(dir string) (string, error) {
 	cmd := exec.Command("git", "remote", "get-url", "origin")

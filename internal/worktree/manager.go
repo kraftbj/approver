@@ -141,46 +141,6 @@ func extractPRNumber(dirName string) int {
 	return n
 }
 
-// UpdateBranch merges the base branch into a PR's worktree and pushes.
-func (m *Manager) UpdateBranch(prNumber int, baseBranch string) error {
-	entries, err := m.ScanExisting()
-	if err != nil {
-		return err
-	}
-
-	path, exists := entries[prNumber]
-	if !exists {
-		return fmt.Errorf("no worktree found for PR #%d", prNumber)
-	}
-
-	// Fetch the base branch
-	fetchCmd := exec.Command("git", "fetch", "origin", baseBranch)
-	fetchCmd.Dir = path
-	if out, err := fetchCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git fetch failed: %s", string(out))
-	}
-
-	// Merge
-	mergeCmd := exec.Command("git", "merge", fmt.Sprintf("origin/%s", baseBranch), "--no-edit")
-	mergeCmd.Dir = path
-	if out, err := mergeCmd.CombinedOutput(); err != nil {
-		// Abort the failed merge
-		abortCmd := exec.Command("git", "merge", "--abort")
-		abortCmd.Dir = path
-		abortCmd.Run()
-		return fmt.Errorf("merge conflict with %s: %s", baseBranch, string(out))
-	}
-
-	// Push
-	pushCmd := exec.Command("git", "push")
-	pushCmd.Dir = path
-	if out, err := pushCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git push failed: %s", string(out))
-	}
-
-	return nil
-}
-
 // sanitizeBranch converts a branch name to a filesystem-safe directory name.
 func sanitizeBranch(branch string) string {
 	// Replace common path separators and special chars
