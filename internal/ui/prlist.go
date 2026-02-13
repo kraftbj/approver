@@ -120,10 +120,18 @@ func (l *PRList) renderPRItem(pr gh.PR, selected bool, width int) (string, strin
 		indicator = "> "
 	}
 
-	// Prefix for manual PRs
+	// Status prefix indicators
 	prefix := ""
 	if pr.Source == "manual" {
 		prefix = ManualBadgeStyle.Render("+")
+	}
+	if pr.HasReview {
+		prefix += CIStyle("pass").Render("R")
+	} else if pr.IsReviewing {
+		prefix += CIStyle("pending").Render("~")
+	}
+	if pr.HasTmux {
+		prefix += ManualBadgeStyle.Render("T")
 	}
 
 	numberStr := fmt.Sprintf("#%d", pr.Number)

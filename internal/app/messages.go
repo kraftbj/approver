@@ -1,6 +1,7 @@
 package app
 
 import (
+	"github.com/kraft/approver/internal/claude"
 	gh "github.com/kraft/approver/internal/github"
 )
 
@@ -42,6 +43,29 @@ type prAddedMsg struct {
 
 // prAddErrorMsg is sent when adding a manual PR fails.
 type prAddErrorMsg struct {
+	err error
+}
+
+// claudeReviewDoneMsg is sent when the review pipeline completes.
+type claudeReviewDoneMsg struct {
+	prNumber int
+	review   claude.ReviewResult
+}
+
+// claudeReviewErrorMsg is sent when the review pipeline fails.
+type claudeReviewErrorMsg struct {
+	prNumber int
+	err      error
+}
+
+// claudeReviewProgressMsg carries pipeline step updates for display.
+type claudeReviewProgressMsg struct {
+	prNumber int
+	step     string
+}
+
+// tmuxSessionErrorMsg is sent when a tmux operation fails.
+type tmuxSessionErrorMsg struct {
 	err error
 }
 

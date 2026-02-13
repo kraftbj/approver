@@ -149,6 +149,94 @@ func (d *PRDetail) View(pr *gh.PR) string {
 	return DetailPanelStyle.Width(d.Width).Height(d.Height).Render(content)
 }
 
+// ReviewDisplayData holds formatted review data for display.
+type ReviewDisplayData struct {
+	Agent1Summary string
+	Agent2Summary string
+	Checklist     string // Agent 3's full numbered checklist (primary display)
+	RawOutput     string // Full combined output
+	IssueCount    int
+	HighCount     int
+}
+
+// ViewReview renders the review results panel.
+func (d *PRDetail) ViewReview(pr *gh.PR, review *ReviewDisplayData) string {
+	if pr == nil {
+		content := DimStyle.Render("No PR selected")
+		return DetailPanelStyle.Width(d.Width).Height(d.Height).Render(content)
+	}
+
+	var sections []string
+
+	sections = append(sections, TitleStyle.Render(fmt.Sprintf("#%d Review Results", pr.Number)))
+	sections = append(sections, "")
+
+	if review == nil {
+		sections = append(sections, DimStyle.Render("  No review available. Press c to start a review."))
+		content := strings.Join(sections, "\n")
+		return DetailPanelStyle.Width(d.Width).Height(d.Height).Render(content)
+	}
+
+	// Summary
+	if review.IssueCount > 0 {
+		summary := fmt.Sprintf("  %d issues found", review.IssueCount)
+		if review.HighCount > 0 {
+			summary += fmt.Sprintf(" (%d high severity)", review.HighCount)
+		}
+		sections = append(sections, IssueSeverityStyle("high").Render(summary))
+	} else {
+		sections = append(sections, CIStyle("pass").Render("  Review complete (see output below)"))
+	}
+	sections = append(sections, "")
+
+	// Checklist (primary content)
+	if review.Checklist != "" {
+		sections = append(sections, SectionHeaderStyle.Render("  Confirmed Issues"))
+		sections = append(sections, "")
+
+		// Display checklist lines, wrapping each to panel width
+		maxWidth := d.Width - 4
+		for _, line := range strings.Split(review.Checklist, "\n") {
+			if len(line) > maxWidth && maxWidth > 0 {
+				line = line[:maxWidth]
+			}
+			sections = append(sections, "  "+line)
+		}
+	} else if review.RawOutput != "" {
+		sections = append(sections, SectionHeaderStyle.Render("  Review Output"))
+		sections = append(sections, "")
+		maxWidth := d.Width - 4
+		for _, line := range strings.Split(review.RawOutput, "\n") {
+			if len(line) > maxWidth && maxWidth > 0 {
+				line = line[:maxWidth]
+			}
+			sections = append(sections, "  "+line)
+		}
+	}
+
+	content := strings.Join(sections, "\n")
+	return DetailPanelStyle.Width(d.Width).Height(d.Height).Render(content)
+}
+
+// ViewReviewing renders the "review in progress" view.
+func (d *PRDetail) ViewReviewing(pr *gh.PR, spinnerView, stepName string) string {
+	if pr == nil {
+		content := DimStyle.Render("No PR selected")
+		return DetailPanelStyle.Width(d.Width).Height(d.Height).Render(content)
+	}
+
+	var sections []string
+
+	sections = append(sections, TitleStyle.Render(fmt.Sprintf("#%d Review in Progress", pr.Number)))
+	sections = append(sections, "")
+	sections = append(sections, fmt.Sprintf("  %s %s", spinnerView, stepName))
+	sections = append(sections, "")
+	sections = append(sections, DimStyle.Render("  Press c to cancel."))
+
+	content := strings.Join(sections, "\n")
+	return DetailPanelStyle.Width(d.Width).Height(d.Height).Render(content)
+}
+
 func checkIcon(status string) string {
 	switch status {
 	case "SUCCESS":

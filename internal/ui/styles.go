@@ -48,6 +48,10 @@ var (
 
 	ManualBadgeStyle = lipgloss.NewStyle().
 				Foreground(ColorCyan)
+
+	SectionHeaderStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(ColorCyan)
 )
 
 // CI status styling
@@ -59,6 +63,20 @@ func CIStyle(status string) lipgloss.Style {
 		return lipgloss.NewStyle().Foreground(ColorRed)
 	case "pending":
 		return lipgloss.NewStyle().Foreground(ColorYellow)
+	default:
+		return lipgloss.NewStyle().Foreground(ColorGray)
+	}
+}
+
+// IssueSeverityStyle returns a style for the given severity level.
+func IssueSeverityStyle(severity string) lipgloss.Style {
+	switch severity {
+	case "high":
+		return lipgloss.NewStyle().Foreground(ColorRed).Bold(true)
+	case "medium":
+		return lipgloss.NewStyle().Foreground(ColorYellow)
+	case "low":
+		return lipgloss.NewStyle().Foreground(ColorGray)
 	default:
 		return lipgloss.NewStyle().Foreground(ColorGray)
 	}

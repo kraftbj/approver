@@ -7,11 +7,12 @@
 - **Status Display** - Show PR title, author, branch, CI status, review state, labels
 - **Keyboard Navigation** - j/k to navigate, Enter to open detail, q to quit
 
-## Phase 2: Claude Code Integration
+## Phase 2: Claude Code Integration [DONE]
 
-- **Manual Claude Review** - Trigger `claude -p` in a PR's worktree with a structured review prompt
-- **Review Output** - Display Claude's analysis in a panel (security, performance, quality, architecture)
-- **Embedded Terminal** - Attach to a Claude Code session for interactive review via tmux
+- **3-Agent Review Pipeline** - `c` key triggers headless review (Agent 1: code review, Agent 2: validate existing reviews, Agent 3: produce confirmed checklist)
+- **Review Output** - Display Claude's analysis in detail panel with Tab toggle between PR info and review results
+- **Interactive Claude Session** - `t` key opens tmux session with Claude in the PR worktree
+- **Configurable** - Review prompt, budget, and allowed tools via config.yaml
 
 ## Phase 3: GitHub Feedback Loop
 

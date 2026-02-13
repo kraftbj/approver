@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,6 +10,8 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/kraft/approver/internal/claude"
+	"github.com/kraft/approver/internal/config"
 	gh "github.com/kraft/approver/internal/github"
 	"github.com/kraft/approver/internal/ui"
 	"github.com/kraft/approver/internal/worktree"
@@ -22,6 +25,14 @@ const (
 	stateConfirm
 	stateHelp
 	stateInput
+)
+
+// detailMode controls what the right panel displays.
+type detailMode int
+
+const (
+	detailInfo   detailMode = iota // PR metadata
+	detailReview                   // Review results
 )
 
 // confirmAction tracks what the confirmation dialog is for.
@@ -62,6 +73,19 @@ type home struct {
 	// Worktree manager
 	wtManager *worktree.Manager
 
+	// Detail panel mode
+	detailMode detailMode
+
+	// Claude review state
+	reviews    map[int]claude.ReviewResult
+	reviewing  map[int]context.CancelFunc
+	reviewStep map[int]string
+
+	// tmux session state
+	tmuxSessions map[int]*claude.TmuxSession
+
+	// Config
+	cfg *config.Config
 }
 
 func newHome() home {
@@ -70,14 +94,18 @@ func newHome() home {
 	s.Style = lipgloss.NewStyle().Foreground(ui.ColorCyan)
 
 	return home{
-		state:     stateLoading,
-		prList:    ui.NewPRList(),
-		detail:    ui.NewPRDetail(),
-		menu:      ui.NewMenu(),
-		errBox:    ui.NewErrBox(),
-		spinner:   s,
-		loading:   true,
-		worktrees: make(map[int]string),
+		state:        stateLoading,
+		prList:       ui.NewPRList(),
+		detail:       ui.NewPRDetail(),
+		menu:         ui.NewMenu(),
+		errBox:       ui.NewErrBox(),
+		spinner:      s,
+		loading:      true,
+		worktrees:    make(map[int]string),
+		reviews:      make(map[int]claude.ReviewResult),
+		reviewing:    make(map[int]context.CancelFunc),
+		reviewStep:   make(map[int]string),
+		tmuxSessions: make(map[int]*claude.TmuxSession),
 	}
 }
 
@@ -101,7 +129,7 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, nil
 
 	case spinner.TickMsg:
-		if h.loading {
+		if h.loading || len(h.reviewing) > 0 {
 			var cmd tea.Cmd
 			h.spinner, cmd = h.spinner.Update(msg)
 			cmds = append(cmds, cmd)
@@ -158,6 +186,26 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.state = stateDefault
 		h.inputBuffer = ""
 		h.showError(fmt.Sprintf("Failed to add PR: %v", msg.err))
+		cmds = append(cmds, clearErrorAfter(3*time.Second))
+
+	case claudeReviewDoneMsg:
+		h.reviews[msg.prNumber] = msg.review
+		delete(h.reviewing, msg.prNumber)
+		delete(h.reviewStep, msg.prNumber)
+		h.reconcileClaudeState()
+
+	case claudeReviewErrorMsg:
+		delete(h.reviewing, msg.prNumber)
+		delete(h.reviewStep, msg.prNumber)
+		h.reconcileClaudeState()
+		h.showError(fmt.Sprintf("Review failed for PR #%d: %v", msg.prNumber, msg.err))
+		cmds = append(cmds, clearErrorAfter(5*time.Second))
+
+	case claudeReviewProgressMsg:
+		h.reviewStep[msg.prNumber] = msg.step
+
+	case tmuxSessionErrorMsg:
+		h.showError(fmt.Sprintf("tmux error: %v", msg.err))
 		cmds = append(cmds, clearErrorAfter(3*time.Second))
 
 	case tea.KeyMsg:
@@ -259,6 +307,83 @@ func (h *home) handleDefaultKey(key string) tea.Cmd {
 			h.showError("Can only remove manually-tracked PRs")
 			return clearErrorAfter(3 * time.Second)
 		}
+
+	case "tab":
+		if h.detailMode == detailInfo {
+			h.detailMode = detailReview
+		} else {
+			h.detailMode = detailInfo
+		}
+
+	case "c":
+		pr := h.prList.SelectedPR()
+		if pr == nil {
+			return nil
+		}
+		if !claude.CheckClaude() {
+			h.showError("claude CLI not found on PATH")
+			return clearErrorAfter(3 * time.Second)
+		}
+		wtPath, exists := h.worktrees[pr.Number]
+		if !exists {
+			h.showError(fmt.Sprintf("No worktree for PR #%d — press w first", pr.Number))
+			return clearErrorAfter(3 * time.Second)
+		}
+		// If already reviewing, cancel
+		if cancel, running := h.reviewing[pr.Number]; running {
+			cancel()
+			delete(h.reviewing, pr.Number)
+			delete(h.reviewStep, pr.Number)
+			h.reconcileClaudeState()
+			return nil
+		}
+		// Start review pipeline
+		h.detailMode = detailReview
+		ctx, cancel := context.WithCancel(context.Background())
+		h.reviewing[pr.Number] = cancel
+		h.reviewStep[pr.Number] = "Starting review..."
+		h.reconcileClaudeState()
+		return tea.Batch(
+			h.spinner.Tick,
+			runClaudeReviewCmd(ctx, h.cfg, pr.Number, wtPath, h.repoDir),
+		)
+
+	case "t":
+		pr := h.prList.SelectedPR()
+		if pr == nil {
+			return nil
+		}
+		if !claude.CheckTmux() {
+			h.showError("tmux not found on PATH")
+			return clearErrorAfter(3 * time.Second)
+		}
+		if !claude.CheckClaude() {
+			h.showError("claude CLI not found on PATH")
+			return clearErrorAfter(3 * time.Second)
+		}
+		wtPath, exists := h.worktrees[pr.Number]
+		if !exists {
+			h.showError(fmt.Sprintf("No worktree for PR #%d — press w first", pr.Number))
+			return clearErrorAfter(3 * time.Second)
+		}
+		// Create or reuse session
+		session, ok := h.tmuxSessions[pr.Number]
+		if !ok || !session.Exists() {
+			session = claude.NewTmuxSession(pr.Number, wtPath)
+			if err := session.Create(); err != nil {
+				h.showError(fmt.Sprintf("Failed to create tmux session: %v", err))
+				return clearErrorAfter(3 * time.Second)
+			}
+			h.tmuxSessions[pr.Number] = session
+			h.reconcileClaudeState()
+		}
+		// Hand off terminal to tmux
+		return tea.ExecProcess(session.AttachCmd(), func(err error) tea.Msg {
+			if err != nil {
+				return tmuxSessionErrorMsg{err: err}
+			}
+			return nil
+		})
 
 	case "?":
 		h.state = stateHelp
@@ -377,7 +502,32 @@ func (h *home) viewDashboard(height int) string {
 	h.detail.SetSize(detailWidth, height)
 
 	listView := h.prList.View()
-	detailView := h.detail.View(h.prList.SelectedPR())
+
+	var detailView string
+	pr := h.prList.SelectedPR()
+
+	if h.detailMode == detailReview {
+		if pr != nil {
+			if _, reviewing := h.reviewing[pr.Number]; reviewing {
+				step := h.reviewStep[pr.Number]
+				detailView = h.detail.ViewReviewing(pr, h.spinner.View(), step)
+			} else if review, ok := h.reviews[pr.Number]; ok {
+				data := &ui.ReviewDisplayData{
+					Checklist:  review.Agent3Out,
+					RawOutput:  review.RawOutput,
+					IssueCount: review.IssueCount(),
+					HighCount:  review.HighSeverityCount(),
+				}
+				detailView = h.detail.ViewReview(pr, data)
+			} else {
+				detailView = h.detail.ViewReview(pr, nil)
+			}
+		} else {
+			detailView = h.detail.ViewReview(nil, nil)
+		}
+	} else {
+		detailView = h.detail.View(pr)
+	}
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, listView, detailView)
 }
@@ -398,12 +548,15 @@ func (h *home) viewHelp(height int) string {
 
   Navigation:
     j/k, up/down   Navigate PR list
+    Tab            Toggle detail/review view
     a              Add PR by number or URL
     d              Remove manually-tracked PR
 
   Actions:
     w              Create worktree for selected PR
     W              Delete worktree (with confirmation)
+    c              Start/cancel Claude review
+    t              Open Claude tmux session
     o              Open PR in browser
     R              Refresh PR list
 
@@ -477,6 +630,18 @@ func (h *home) reconcileWorktrees() {
 	for i := range h.prList.PRs {
 		_, exists := h.worktrees[h.prList.PRs[i].Number]
 		h.prList.PRs[i].HasWorktree = exists
+	}
+}
+
+func (h *home) reconcileClaudeState() {
+	for i := range h.prList.PRs {
+		num := h.prList.PRs[i].Number
+		_, hasReview := h.reviews[num]
+		_, isReviewing := h.reviewing[num]
+		session, hasTmux := h.tmuxSessions[num]
+		h.prList.PRs[i].HasReview = hasReview
+		h.prList.PRs[i].IsReviewing = isReviewing
+		h.prList.PRs[i].HasTmux = hasTmux && session.Exists()
 	}
 }
 
@@ -578,6 +743,22 @@ func removeTrackedPRCmd(prNumber int) tea.Cmd {
 	}
 }
 
+func runClaudeReviewCmd(ctx context.Context, cfg *config.Config, prNumber int, worktreePath, repoDir string) tea.Cmd {
+	return func() tea.Msg {
+		prompt := ""
+		allowedTools := ""
+		if cfg != nil {
+			prompt = cfg.ReviewPrompt
+			allowedTools = cfg.AllowedTools
+		}
+		result, err := claude.RunReviewPipeline(ctx, worktreePath, repoDir, prNumber, prompt, allowedTools, nil)
+		if err != nil {
+			return claudeReviewErrorMsg{prNumber: prNumber, err: err}
+		}
+		return claudeReviewDoneMsg{prNumber: prNumber, review: *result}
+	}
+}
+
 func max(a, b int) int {
 	if a > b {
 		return a
@@ -603,9 +784,12 @@ func Run() error {
 		os.Exit(1)
 	}
 
+	cfg := config.LoadConfig()
+
 	h := newHome()
 	h.repoDir = repoDir
 	h.wtManager = worktree.NewManager(repoDir)
+	h.cfg = cfg
 
 	p := tea.NewProgram(h, tea.WithAltScreen())
 	_, err = p.Run()

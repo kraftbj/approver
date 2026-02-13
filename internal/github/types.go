@@ -31,6 +31,15 @@ type PR struct {
 
 	// HasWorktree is set at runtime by reconciling with worktree state.
 	HasWorktree bool `json:"-"`
+
+	// HasReview is set at runtime when a completed review exists.
+	HasReview bool `json:"-"`
+
+	// IsReviewing is set at runtime when a review is in progress.
+	IsReviewing bool `json:"-"`
+
+	// HasTmux is set at runtime when a tmux Claude session exists.
+	HasTmux bool `json:"-"`
 }
 
 type Author struct {
