@@ -15,30 +15,46 @@
 - **Configurable** - Review prompt, budget, and allowed tools via config.yaml
 - **Fun review spinner** - Cycle through playful status messages while review runs (since there's no streaming output)
 
-## Bugs
-
-- ~~**Review panel hint misleading without worktree**~~ [DONE] - Shows "press w to create a worktree first" when no worktree exists
-
-## Enhancements
-
-- ~~**Auto-create worktree on demand**~~ [DONE] - `c` and `t` auto-create worktrees, then dispatch the pending action
-- ~~**Worktree creation spinner**~~ [DONE] - `W` indicator in PR list, "creating..." in detail panel, spinner while creating
-- ~~**Approve from the app**~~ [DONE] - `A` key approves with confirmation dialog via `gh pr review --approve`
-- ~~**Per-repo setup commands**~~ [DONE] - `repos` config map with `setup_command`, runs after worktree creation
-- ~~**Tmux detach hint**~~ [DONE] - tmux status bar shows "Ctrl+b d: back to Approver"
-- ~~**Fun review spinner**~~ [DONE] - Rotates through playful messages every 4 seconds during review
-
 ## Phase 3: GitHub Feedback Loop [DONE]
 
-- ~~**Comment Viewer**~~ [DONE] - Tab cycles info/review/comments; shows author, time, body for each comment
-- ~~**Review Posting**~~ [DONE] - `X` key requests changes with single-line reason input
-- ~~**Background Poller**~~ [DONE] - Polls every `poll_interval` seconds (default 300, configurable, 0 = off)
-- **Inline Comment Drafting** - Needs file/line browser UX design (deferred)
+- **Comment Viewer** - Tab cycles info/review/comments; shows author, time, body for each comment
+- **Review Posting** - `X` key requests changes with single-line reason input
+- **Background Poller** - Polls every `poll_interval` seconds (default 300, configurable, 0 = off)
 
 ## Phase 4: Polish [DONE]
 
-- ~~**Setup Scripts**~~ [DONE] - Configurable per-repo setup command run in each worktree
-- ~~**Notifications**~~ [DONE] - Yellow `!` badge when comment count, CI, or review decision changes between polls
-- ~~**Persistence**~~ [DONE] - Review results saved to ~/.config/approver/reviews/ and restored on startup
-- ~~**Update Branch to Trunk**~~ [DONE] - `u` key merges origin/{base} into worktree, offers to push
-- **Multi-Repo** - Needs config model for multiple repo dirs (deferred)
+- **Setup Scripts** - Configurable per-repo setup command run in each worktree
+- **Notifications** - Yellow `!` badge when comment count, CI, or review decision changes between polls
+- **Persistence** - Review results saved to ~/.config/approver/reviews/ and restored on startup
+- **Update Branch to Trunk** - `u` key merges origin/{base} into worktree, offers to push
+
+## Phase 5: Multi-Screen Infrastructure
+
+- **Screen interface** - `Screen` with `HandleKey()`/`View()`, `home` stays as tea.Model dispatcher
+- **Screen switching** - `1`/`2`/`3` keys switch between Reviews, Issues, Watchlist
+- **Screen indicator** - Menu bar shows `[1:Reviews] 2:Issues 3:Watchlist` with active screen highlighted
+- **PR screen extraction** - PR-specific UI logic extracted from `handleDefaultKey` into `prScreen`
+- **Shared state** - All domain state (worktrees, reviews, config) stays in `home`
+
+## Phase 6: Issues Screen
+
+- **Fetch assigned issues** - `gh issue list --assignee @me` with JSON output
+- **Issue list + detail** - Two-panel layout matching PR screen pattern
+- **Issue workspaces** - Worktree + new branch from default branch, auto-named `issue-{number}-{slug}`
+- **AI modes** - Collaborative (tmux session) and autonomous (headless Claude)
+- **Manual additions** - `a` key to add issues by number/URL
+- **Persistence** - `tracked-issues.json` for manually-added issues
+
+## Phase 7: Watchlist Screen
+
+- **Merge manual tracking** - Migrate manually-tracked PRs from Reviews to Watchlist
+- **Reviews cleanup** - Remove `a`/`d` keys from Reviews (review-requests only)
+- **AI summaries** - Headless Claude call to summarize PR diff + comments
+- **Watchlist keys** - `a` add, `d` remove, `s` AI summary, `o` open, `R` refresh
+
+## Future
+
+- **Inline Comment Drafting** - File/line browser UX for posting inline review comments
+- **Multi-Repo** - Config model for multiple repo dirs, cross-repo watchlist
+- **Watchlist: Issues** - Track issues alongside PRs in the watchlist
+- **Cross-Repo Watchlist** - Track PRs/issues from repos other than the current one
