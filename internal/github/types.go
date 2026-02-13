@@ -51,6 +51,12 @@ type PR struct {
 
 	// IsCreatingWorktree is set at runtime while a worktree is being created.
 	IsCreatingWorktree bool `json:"-"`
+
+	// HasNotification is set at runtime when PR state changed since last viewed.
+	HasNotification bool `json:"-"`
+
+	// CommentCount is the number of comments on the PR, populated at fetch time.
+	CommentCount int `json:"-"`
 }
 
 type Author struct {

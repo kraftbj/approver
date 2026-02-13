@@ -53,6 +53,13 @@ const (
 	inputRequestChanges                    // Entering reason for request-changes
 )
 
+// prSnapshot captures PR state for change detection between polls.
+type prSnapshot struct {
+	commentCount   int
+	ciStatus       string
+	reviewDecision string
+}
+
 // pendingAction tracks an action deferred until worktree creation completes.
 type pendingAction int
 
@@ -104,6 +111,9 @@ type home struct {
 	// PR comments cache (pr number -> comments)
 	comments map[int][]gh.Comment
 
+	// Notification snapshots for detecting PR state changes
+	prSnapshots map[int]prSnapshot
+
 	// tmux session state
 	tmuxSessions map[int]*claude.TmuxSession
 
@@ -139,6 +149,7 @@ func newHome() home {
 		reviewing:    make(map[int]context.CancelFunc),
 		reviewStep:   make(map[int]string),
 		comments:          make(map[int][]gh.Comment),
+		prSnapshots:       make(map[int]prSnapshot),
 		tmuxSessions:      make(map[int]*claude.TmuxSession),
 		creatingWorktrees: make(map[int]bool),
 	}
@@ -175,6 +186,7 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.state = stateDefault
 		h.prList.SetPRs(msg.prs)
 		h.reconcileWorktrees()
+		h.takeSnapshots()
 		// Also fetch tracked PRs to merge in
 		cmds = append(cmds, fetchTrackedPRsCmd(h.repoDir))
 		// Schedule background polling
@@ -299,6 +311,8 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		h.reconcileWorktrees()
 		h.reconcileClaudeState()
+		h.reconcileNotifications()
+		h.takeSnapshots()
 		// Schedule next poll
 		if h.cfg != nil && h.cfg.PollInterval > 0 {
 			cmds = append(cmds, pollTick(h.cfg.PollInterval))
@@ -381,9 +395,11 @@ func (h *home) handleDefaultKey(key string) tea.Cmd {
 
 	case "j", "down":
 		h.prList.MoveDown()
+		h.clearNotification()
 
 	case "k", "up":
 		h.prList.MoveUp()
+		h.clearNotification()
 
 	case "R":
 		h.loading = true
@@ -817,6 +833,41 @@ func (h *home) reconcileClaudeState() {
 		h.prList.PRs[i].HasReview = hasReview
 		h.prList.PRs[i].IsReviewing = isReviewing
 		h.prList.PRs[i].HasTmux = hasTmux && session.Exists()
+	}
+}
+
+// clearNotification removes the notification flag from the currently selected PR.
+func (h *home) clearNotification() {
+	pr := h.prList.SelectedPR()
+	if pr != nil {
+		pr.HasNotification = false
+	}
+}
+
+// takeSnapshots records the current state of all PRs for future change detection.
+func (h *home) takeSnapshots() {
+	for _, pr := range h.prList.PRs {
+		h.prSnapshots[pr.Number] = prSnapshot{
+			commentCount:   pr.CommentCount,
+			ciStatus:       pr.CIStatus(),
+			reviewDecision: pr.ReviewDecision,
+		}
+	}
+}
+
+// reconcileNotifications compares current PR state to snapshots and sets notifications.
+func (h *home) reconcileNotifications() {
+	for i := range h.prList.PRs {
+		pr := &h.prList.PRs[i]
+		snap, exists := h.prSnapshots[pr.Number]
+		if !exists {
+			continue // No snapshot = first load, no notification
+		}
+		if pr.CommentCount != snap.commentCount ||
+			pr.CIStatus() != snap.ciStatus ||
+			pr.ReviewDecision != snap.reviewDecision {
+			pr.HasNotification = true
+		}
 	}
 }
 
