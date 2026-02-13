@@ -188,3 +188,25 @@ type issueWorktreeErrorMsg struct {
 	err         error
 }
 
+// Watchlist screen messages
+
+// watchlistLoadedMsg is sent when watchlist PRs have been fetched.
+type watchlistLoadedMsg struct {
+	prs []gh.PR
+}
+
+// watchlistErrorMsg is sent when fetching watchlist PRs fails.
+type watchlistErrorMsg struct {
+	err error
+}
+
+// watchlistPRAddedMsg is sent when a PR is added to the watchlist.
+type watchlistPRAddedMsg struct {
+	pr gh.PR
+}
+
+// watchlistAddErrorMsg is sent when adding a watchlist PR fails.
+type watchlistAddErrorMsg struct {
+	err error
+}
+

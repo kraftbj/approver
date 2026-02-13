@@ -55,6 +55,7 @@ const (
 	inputAddPR          inputAction = iota // Adding a PR by number/URL
 	inputRequestChanges                    // Entering reason for request-changes
 	inputAddIssue                          // Adding an issue by number/URL
+	inputAddWatchlistPR                    // Adding a PR to the watchlist
 )
 
 // prSnapshot captures PR state for change detection between polls.
@@ -79,9 +80,10 @@ type home struct {
 	state  state
 
 	// Screen management
-	active activeScreen
-	pr     prScreen
-	issues issueScreen
+	active    activeScreen
+	pr        prScreen
+	issues    issueScreen
+	watchlist watchlistScreen
 
 	// UI components
 	menu    ui.Menu
@@ -142,6 +144,9 @@ type home struct {
 	pendingIssue    pendingIssueAction
 	pendingIssueNum int
 
+	// Watchlist AI summaries (pr number -> summary text)
+	watchlistSummaries map[int]string
+
 	// Config
 	cfg *config.Config
 }
@@ -156,6 +161,7 @@ func newHome() home {
 		active:                 screenReviews,
 		pr:                     newPRScreen(),
 		issues:                 newIssueScreen(),
+		watchlist:              newWatchlistScreen(),
 		menu:                   ui.NewMenu(),
 		errBox:                 ui.NewErrBox(),
 		spinner:                s,
@@ -171,6 +177,7 @@ func newHome() home {
 		issueWorktrees:         make(map[int]string),
 		creatingIssueWorktrees: make(map[int]bool),
 		issueTmuxSessions:      make(map[int]*claude.TmuxSession),
+		watchlistSummaries:     make(map[int]string),
 	}
 }
 
@@ -182,6 +189,7 @@ func (h home) Init() tea.Cmd {
 		scanIssueWorktreesCmd(h.wtManager),
 		loadReviewsCmd(),
 		fetchIssuesCmd(h.repoDir),
+		fetchWatchlistCmd(h.repoDir),
 	)
 }
 
@@ -209,18 +217,19 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.pr.prList.SetPRs(msg.prs)
 		h.reconcileWorktrees()
 		h.takeSnapshots()
-		// Also fetch tracked PRs to merge in
-		cmds = append(cmds, fetchTrackedPRsCmd(h.repoDir))
 		// Schedule background polling
 		if h.cfg != nil && h.cfg.PollInterval > 0 {
 			cmds = append(cmds, pollTick(h.cfg.PollInterval))
 		}
 
 	case trackedPRsLoadedMsg:
-		for _, pr := range msg.prs {
-			h.addPRToList(pr)
+		// Tracked PRs go to the watchlist screen, not reviews
+		h.watchlist.loaded = true
+		if h.active == screenWatchlist && h.loading {
+			h.loading = false
+			h.state = stateDefault
 		}
-		h.reconcileWorktrees()
+		h.watchlist.prList.SetPRs(msg.prs)
 
 	case prsErrorMsg:
 		h.loading = false
@@ -455,6 +464,36 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.issueWorktrees = msg.worktrees
 		h.reconcileIssueWorktrees()
 
+	// Watchlist screen messages
+
+	case watchlistLoadedMsg:
+		h.watchlist.loaded = true
+		if h.active == screenWatchlist && h.loading {
+			h.loading = false
+			h.state = stateDefault
+		}
+		h.watchlist.prList.SetPRs(msg.prs)
+
+	case watchlistErrorMsg:
+		if h.active == screenWatchlist && h.loading {
+			h.loading = false
+			h.state = stateDefault
+		}
+		h.showError(fmt.Sprintf("Failed to fetch watchlist: %v", msg.err))
+		cmds = append(cmds, clearErrorAfter(3*time.Second))
+
+	case watchlistPRAddedMsg:
+		h.addWatchlistPR(msg.pr)
+		h.state = stateDefault
+		h.inputBuffer = ""
+		addTrackedPR(msg.pr.Number)
+
+	case watchlistAddErrorMsg:
+		h.state = stateDefault
+		h.inputBuffer = ""
+		h.showError(fmt.Sprintf("Failed to add PR to watchlist: %v", msg.err))
+		cmds = append(cmds, clearErrorAfter(3*time.Second))
+
 	case tea.KeyMsg:
 		cmd := h.handleKey(msg)
 		if cmd != nil {
@@ -515,18 +554,7 @@ func (h *home) handleDefaultKey(key string) tea.Cmd {
 	case screenIssues:
 		return h.issues.HandleKey(h, key)
 	case screenWatchlist:
-		return h.handlePlaceholderKey(key)
-	}
-	return nil
-}
-
-// handlePlaceholderKey handles keys for screens not yet implemented.
-func (h *home) handlePlaceholderKey(key string) tea.Cmd {
-	switch key {
-	case "q":
-		return tea.Quit
-	case "?":
-		h.state = stateHelp
+		return h.watchlist.HandleKey(h, key)
 	}
 	return nil
 }
@@ -595,6 +623,9 @@ func (h *home) handleInputKey(msg tea.KeyMsg) tea.Cmd {
 			case inputAddIssue:
 				h.state = stateDefault
 				return fetchSingleIssueCmd(h.repoDir, input)
+			case inputAddWatchlistPR:
+				h.state = stateDefault
+				return fetchSingleWatchlistPRCmd(h.repoDir, input)
 			default:
 				return fetchSinglePRCmd(h.repoDir, input)
 			}
@@ -635,7 +666,7 @@ func (h home) View() string {
 	case screenIssues:
 		mainContent = h.issues.View(&h, panelHeight)
 	case screenWatchlist:
-		mainContent = h.viewPlaceholder("Watchlist", "Tracked PRs will appear here.", panelHeight)
+		mainContent = h.watchlist.View(&h, panelHeight)
 	}
 
 	// Overlay handling
@@ -679,11 +710,6 @@ func (h *home) viewLoading(height int) string {
 
 func (h *home) viewEmpty(height int) string {
 	content := ui.DimStyle.Render("\n\n  No PRs requesting your review.\n\n  Press R to refresh.")
-	return lipgloss.NewStyle().Width(h.width).Height(height).Render(content)
-}
-
-func (h *home) viewPlaceholder(title, subtitle string, height int) string {
-	content := ui.DimStyle.Render(fmt.Sprintf("\n\n  %s\n\n  %s\n\n  Press 1/2/3 to switch screens.", title, subtitle))
 	return lipgloss.NewStyle().Width(h.width).Height(height).Render(content)
 }
 
@@ -777,6 +803,9 @@ func (h *home) layoutPanels() {
 
 	h.issues.issueList.SetSize(listWidth, panelHeight)
 	h.issues.detail.SetSize(detailWidth, panelHeight)
+
+	h.watchlist.prList.SetSize(listWidth, panelHeight)
+	h.watchlist.detail.SetSize(detailWidth, panelHeight)
 
 	h.menu.SetWidth(h.width)
 	h.errBox.SetWidth(h.width)
@@ -894,6 +923,28 @@ func (h *home) dispatchIssuePending(issueNumber int, wtPath string) tea.Cmd {
 func (h *home) clearIssuePending() {
 	h.pendingIssue = pendingIssueNone
 	h.pendingIssueNum = 0
+}
+
+func (h *home) addWatchlistPR(pr gh.PR) {
+	for i, existing := range h.watchlist.prList.PRs {
+		if existing.Number == pr.Number {
+			h.watchlist.prList.PRs[i] = pr
+			return
+		}
+	}
+	h.watchlist.prList.PRs = append(h.watchlist.prList.PRs, pr)
+}
+
+func (h *home) removeWatchlistPR(number int) {
+	for i, pr := range h.watchlist.prList.PRs {
+		if pr.Number == number {
+			h.watchlist.prList.PRs = append(h.watchlist.prList.PRs[:i], h.watchlist.prList.PRs[i+1:]...)
+			if h.watchlist.prList.Selected >= len(h.watchlist.prList.PRs) {
+				h.watchlist.prList.Selected = max(0, len(h.watchlist.prList.PRs)-1)
+			}
+			return
+		}
+	}
 }
 
 func (h *home) addPRToList(pr gh.PR) {
