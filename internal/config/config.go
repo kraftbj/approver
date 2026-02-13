@@ -25,6 +25,10 @@ type Config struct {
 	// AllowedTools is the set of tools review agents can use (default: "Read,Glob,Grep").
 	AllowedTools string `yaml:"allowed_tools,omitempty"`
 
+	// PollInterval is the number of seconds between background PR refreshes.
+	// Default: 300 (5 minutes). Set to 0 to disable polling.
+	PollInterval int `yaml:"poll_interval,omitempty"`
+
 	// Repos holds per-repository configuration keyed by a substring of the remote URL.
 	Repos map[string]RepoConfig `yaml:"repos,omitempty"`
 }
@@ -52,7 +56,8 @@ func (c *Config) RepoSetupCommand(repoURL string) string {
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
-		PRLimit: 50,
+		PRLimit:      50,
+		PollInterval: 300,
 	}
 }
 
@@ -84,6 +89,9 @@ func LoadConfig() *Config {
 	}
 	if cfg.AllowedTools == "" {
 		cfg.AllowedTools = "Read,Glob,Grep"
+	}
+	if cfg.PollInterval == 0 {
+		cfg.PollInterval = 300
 	}
 
 	return cfg

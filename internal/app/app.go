@@ -177,6 +177,10 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.reconcileWorktrees()
 		// Also fetch tracked PRs to merge in
 		cmds = append(cmds, fetchTrackedPRsCmd(h.repoDir))
+		// Schedule background polling
+		if h.cfg != nil && h.cfg.PollInterval > 0 {
+			cmds = append(cmds, pollTick(h.cfg.PollInterval))
+		}
 
 	case trackedPRsLoadedMsg:
 		// Merge tracked PRs into the list (dedup by number)
@@ -279,6 +283,26 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case prApproveErrorMsg:
 		h.showError(fmt.Sprintf("Failed to approve PR #%d: %v", msg.prNumber, msg.err))
 		cmds = append(cmds, clearErrorAfter(5*time.Second))
+
+	case pollTickMsg:
+		// Don't poll while loading to avoid stacking requests
+		if !h.loading {
+			cmds = append(cmds, pollPRsCmd(h.repoDir))
+		} else if h.cfg != nil && h.cfg.PollInterval > 0 {
+			cmds = append(cmds, pollTick(h.cfg.PollInterval))
+		}
+
+	case pollPRsLoadedMsg:
+		// Silently merge updated PRs without resetting loading state
+		for _, pr := range msg.prs {
+			h.addPRToList(pr)
+		}
+		h.reconcileWorktrees()
+		h.reconcileClaudeState()
+		// Schedule next poll
+		if h.cfg != nil && h.cfg.PollInterval > 0 {
+			cmds = append(cmds, pollTick(h.cfg.PollInterval))
+		}
 
 	case prChangesRequestedMsg:
 		h.showError(fmt.Sprintf("Changes requested on PR #%d", msg.prNumber))
@@ -885,6 +909,23 @@ func scanWorktreesCmd(mgr *worktree.Manager) tea.Cmd {
 // worktreesScanMsg carries the initial worktree scan results.
 type worktreesScanMsg struct {
 	worktrees map[int]string
+}
+
+func pollTick(intervalSeconds int) tea.Cmd {
+	return tea.Tick(time.Duration(intervalSeconds)*time.Second, func(time.Time) tea.Msg {
+		return pollTickMsg{}
+	})
+}
+
+func pollPRsCmd(repoDir string) tea.Cmd {
+	return func() tea.Msg {
+		prs, err := gh.FetchPRs(repoDir)
+		if err != nil {
+			// Silently ignore poll errors
+			return nil
+		}
+		return pollPRsLoadedMsg{prs: prs}
+	}
 }
 
 func fetchCommentsCmd(repoDir string, prNumber int) tea.Cmd {

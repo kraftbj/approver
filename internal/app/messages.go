@@ -107,6 +107,14 @@ type prChangesRequestErrorMsg struct {
 	err      error
 }
 
+// pollTickMsg signals that a background poll interval has elapsed.
+type pollTickMsg struct{}
+
+// pollPRsLoadedMsg carries silently-refreshed PRs from a background poll.
+type pollPRsLoadedMsg struct {
+	prs []gh.PR
+}
+
 // setupDoneMsg is sent when a per-repo setup command completes.
 type setupDoneMsg struct {
 	prNumber int
