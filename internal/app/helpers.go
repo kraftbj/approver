@@ -43,6 +43,7 @@ func (h *home) viewHelp(height int) string {
     A              Approve PR (with confirmation)
     X              Request changes (with reason)
     u              Update branch (merge base into worktree)
+    F              Fix review findings (select + agent)
 
   Issues:
     w              Create worktree for selected issue
@@ -286,6 +287,133 @@ func (h *home) dispatchIssuePending(issueNumber int, wtPath string) tea.Cmd {
 func (h *home) clearIssuePending() {
 	h.pendingIssue = pendingIssueNone
 	h.pendingIssueNum = 0
+}
+
+func (h *home) handleFixSelectKey(key string) tea.Cmd {
+	switch key {
+	case "j", "down":
+		if h.fixCursor < len(h.fixItems)-1 {
+			h.fixCursor++
+		}
+	case "k", "up":
+		if h.fixCursor > 0 {
+			h.fixCursor--
+		}
+	case " ":
+		if h.fixCursor < len(h.fixSelected) {
+			h.fixSelected[h.fixCursor] = !h.fixSelected[h.fixCursor]
+		}
+	case "a":
+		allSelected := true
+		for _, s := range h.fixSelected {
+			if !s {
+				allSelected = false
+				break
+			}
+		}
+		for i := range h.fixSelected {
+			h.fixSelected[i] = !allSelected
+		}
+	case "enter":
+		var selected []claude.FixItem
+		for i, item := range h.fixItems {
+			if h.fixSelected[i] {
+				selected = append(selected, item)
+			}
+		}
+		if len(selected) == 0 {
+			h.state = stateDefault
+			return nil
+		}
+		pr := h.pr.prList.SelectedPR()
+		if pr == nil {
+			h.state = stateDefault
+			return nil
+		}
+		wtPath := h.worktrees[pr.Number]
+		h.state = stateDefault
+		return h.startFix(pr.Number, wtPath, selected)
+	case "esc":
+		h.state = stateDefault
+	}
+	return nil
+}
+
+func (h *home) startFix(prNumber int, wtPath string, items []claude.FixItem) tea.Cmd {
+	h.pr.detailMode = detailFix
+	ctx, cancel := context.WithCancel(context.Background())
+	h.fixing[prNumber] = cancel
+	h.fixStep[prNumber] = funFixMessages[0]
+	h.fixMsgIdx = 0
+	return tea.Batch(
+		h.spinner.Tick,
+		runFixCmd(ctx, h.cfg, prNumber, wtPath, items),
+		fixSpinnerTick(),
+	)
+}
+
+func (h *home) viewFixSelectOverlay(base string, height int) string {
+	var lines []string
+	lines = append(lines, ui.SectionHeaderStyle.Render("Select findings to fix"))
+	lines = append(lines, ui.DimStyle.Render("space=toggle  a=all  enter=start  esc=cancel"))
+	lines = append(lines, "")
+
+	maxItems := height - 8
+	if maxItems < 5 {
+		maxItems = 5
+	}
+
+	// Compute scroll window
+	start := 0
+	if h.fixCursor >= maxItems {
+		start = h.fixCursor - maxItems + 1
+	}
+	end := start + maxItems
+	if end > len(h.fixItems) {
+		end = len(h.fixItems)
+	}
+
+	for i := start; i < end; i++ {
+		item := h.fixItems[i]
+		check := "[ ]"
+		if h.fixSelected[i] {
+			check = "[x]"
+		}
+		cursor := "  "
+		if i == h.fixCursor {
+			cursor = "> "
+		}
+
+		sourceTag := fmt.Sprintf("[%s]", item.Source)
+		line := fmt.Sprintf("%s%s %s %s", cursor, check, sourceTag, item.Summary)
+
+		// Truncate to fit
+		maxWidth := h.width - 10
+		if maxWidth > 0 && len(line) > maxWidth {
+			line = line[:maxWidth-3] + "..."
+		}
+
+		if i == h.fixCursor {
+			lines = append(lines, ui.SelectedStyle.Render(line))
+		} else {
+			lines = append(lines, line)
+		}
+	}
+
+	if len(h.fixItems) > maxItems {
+		lines = append(lines, "")
+		lines = append(lines, ui.DimStyle.Render(fmt.Sprintf("  %d/%d items", h.fixCursor+1, len(h.fixItems))))
+	}
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	overlay := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ui.ColorCyan).
+		Padding(1, 2).
+		Width(h.width - 10).
+		Render(content)
+
+	return placeOverlay(h.width, height, base, overlay)
 }
 
 func (h *home) repoSetupCommand() string {

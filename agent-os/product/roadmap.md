@@ -52,9 +52,14 @@
 - **AI summaries** - Headless Claude call to summarize PR diff + comments
 - **Watchlist keys** - `a` add, `d` remove, `s` AI summary, `o` open, `R` refresh
 
-## Future
+## Phase 8: Review Fix Agent [DONE]
 
-- **Review Fix Agent** - Pass review findings to a new Claude agent that fixes the issues in the worktree, then seeks reviewer approval before committing and pushing
+- **Fix Agent** - `F` key opens selection overlay listing findings from Claude review + GitHub comments, runs a Claude agent to apply fixes in the worktree, then offers commit+push
+- **Fix Selection UI** - j/k navigate, space toggles, a selects all, enter starts, esc cancels
+- **Fix Detail Tab** - Tab cycles info/review/comments/fix; shows progress spinner or agent output
+- **Configurable Tools** - `fix_allowed_tools` config option (default: Read,Write,Edit,Glob,Grep)
+
+## Future
 - ~~**Review Word Wrap**~~ - Done. Review output, comments, and issue descriptions now word-wrap to fit the detail panel width
 - ~~**Optimistic Approval State**~~ - Done. After approving a PR, the review decision badge flips to APPROVED immediately; the background re-fetch confirms the state
 - **Inline Comment Drafting** - File/line browser UX for posting inline review comments

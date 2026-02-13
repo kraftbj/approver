@@ -245,3 +245,37 @@ type watchlistAddErrorMsg struct {
 	err error
 }
 
+// Fix agent messages
+
+// fixDoneMsg is sent when the fix agent completes successfully.
+type fixDoneMsg struct {
+	prNumber int
+	output   string
+}
+
+// fixErrorMsg is sent when the fix agent fails.
+type fixErrorMsg struct {
+	prNumber int
+	err      error
+}
+
+// fixProgressMsg carries fix agent progress updates.
+type fixProgressMsg struct {
+	prNumber int
+	step     string
+}
+
+// fixCommitPushDoneMsg is sent when fix commit+push completes.
+type fixCommitPushDoneMsg struct {
+	prNumber int
+}
+
+// fixCommitPushErrorMsg is sent when fix commit+push fails.
+type fixCommitPushErrorMsg struct {
+	prNumber int
+	err      error
+}
+
+// fixSpinnerTickMsg rotates the fun fix spinner messages.
+type fixSpinnerTickMsg struct{}
+

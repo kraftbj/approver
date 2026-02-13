@@ -73,6 +73,17 @@ func ConfirmHints() []KeyHint {
 	}
 }
 
+// FixSelectHints returns keybindings during fix selection.
+func FixSelectHints() []KeyHint {
+	return []KeyHint{
+		{"j/k", "navigate"},
+		{"space", "toggle"},
+		{"a", "select all"},
+		{"enter", "start fix"},
+		{"esc", "cancel"},
+	}
+}
+
 // InputHints returns keybindings during text input.
 func InputHints() []KeyHint {
 	return []KeyHint{

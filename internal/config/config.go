@@ -22,6 +22,9 @@ type Config struct {
 	// AllowedTools is the set of tools review agents can use (default: "Read,Glob,Grep").
 	AllowedTools string `yaml:"allowed_tools,omitempty"`
 
+	// FixAllowedTools is the set of tools the fix agent can use (default: "Read,Write,Edit,Glob,Grep").
+	FixAllowedTools string `yaml:"fix_allowed_tools,omitempty"`
+
 	// PollInterval is the number of seconds between background PR refreshes.
 	// Default: 300 (5 minutes). Set to 0 to disable polling.
 	PollInterval *int `yaml:"poll_interval,omitempty"`
@@ -55,9 +58,10 @@ func DefaultConfig() *Config {
 	defaultPoll := 300
 	defaultLimit := 50
 	return &Config{
-		PRLimit:      defaultLimit,
-		PollInterval: &defaultPoll,
-		AllowedTools: "Read,Glob,Grep",
+		PRLimit:         defaultLimit,
+		PollInterval:    &defaultPoll,
+		AllowedTools:    "Read,Glob,Grep",
+		FixAllowedTools: "Read,Write,Edit,Glob,Grep",
 	}
 }
 
@@ -97,6 +101,9 @@ func LoadConfig() *Config {
 	}
 	if cfg.AllowedTools == "" {
 		cfg.AllowedTools = "Read,Glob,Grep"
+	}
+	if cfg.FixAllowedTools == "" {
+		cfg.FixAllowedTools = "Read,Write,Edit,Glob,Grep"
 	}
 
 	return cfg

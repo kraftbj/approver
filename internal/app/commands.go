@@ -217,6 +217,57 @@ func approvePRCmd(repoDir string, prNumber int) tea.Cmd {
 	}
 }
 
+func runFixCmd(ctx context.Context, cfg *config.Config, prNumber int, worktreePath string, items []claude.FixItem) tea.Cmd {
+	return func() tea.Msg {
+		allowedTools := ""
+		if cfg != nil {
+			allowedTools = cfg.FixAllowedTools
+		}
+		output, err := claude.RunFixAgent(ctx, worktreePath, items, allowedTools, nil)
+		if err != nil {
+			return fixErrorMsg{prNumber: prNumber, err: err}
+		}
+		return fixDoneMsg{prNumber: prNumber, output: output}
+	}
+}
+
+func fixCommitPushCmd(wtPath string, prNumber int) tea.Cmd {
+	return func() tea.Msg {
+		addCmd := exec.Command("git", "-C", wtPath, "add", "-A")
+		if out, err := addCmd.CombinedOutput(); err != nil {
+			return fixCommitPushErrorMsg{prNumber: prNumber, err: fmt.Errorf("git add: %s", string(out))}
+		}
+
+		commitMsg := fmt.Sprintf("Fix review findings for PR #%d", prNumber)
+		commitCmd := exec.Command("git", "-C", wtPath, "commit", "-m", commitMsg)
+		if out, err := commitCmd.CombinedOutput(); err != nil {
+			return fixCommitPushErrorMsg{prNumber: prNumber, err: fmt.Errorf("git commit: %s", string(out))}
+		}
+
+		pushCmd := exec.Command("git", "-C", wtPath, "push", "origin", "HEAD")
+		if out, err := pushCmd.CombinedOutput(); err != nil {
+			return fixCommitPushErrorMsg{prNumber: prNumber, err: fmt.Errorf("git push: %s", string(out))}
+		}
+
+		return fixCommitPushDoneMsg{prNumber: prNumber}
+	}
+}
+
+var funFixMessages = []string{
+	"Applying fixes...",
+	"Patching things up...",
+	"Rewriting the bugs away...",
+	"Making it right...",
+	"Surgeon at work...",
+	"Almost done fixing...",
+}
+
+func fixSpinnerTick() tea.Cmd {
+	return tea.Tick(4*time.Second, func(time.Time) tea.Msg {
+		return fixSpinnerTickMsg{}
+	})
+}
+
 func runSetupCmd(wtPath, setupCommand string, prNumber int) tea.Cmd {
 	return func() tea.Msg {
 		cmd := exec.Command("sh", "-c", setupCommand)

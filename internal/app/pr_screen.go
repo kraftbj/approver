@@ -79,6 +79,42 @@ func (s *prScreen) HandleKey(h *home, key string) tea.Cmd {
 			h.confirmMsg = fmt.Sprintf("Delete worktree for PR #%d? (y/n)", pr.Number)
 		}
 
+	case "F":
+		pr := s.prList.SelectedPR()
+		if pr == nil {
+			return nil
+		}
+		if !claude.CheckClaude() {
+			h.showError("claude CLI not found on PATH")
+			return clearErrorAfter(3 * time.Second)
+		}
+		if _, exists := h.worktrees[pr.Number]; !exists {
+			h.showError(fmt.Sprintf("No worktree for PR #%d — create one first with w", pr.Number))
+			return clearErrorAfter(3 * time.Second)
+		}
+		if _, running := h.fixing[pr.Number]; running {
+			h.showError("Fix agent already running")
+			return clearErrorAfter(3 * time.Second)
+		}
+
+		// Build fix items from both sources
+		var items []claude.FixItem
+		if review, ok := h.reviews[pr.Number]; ok {
+			items = append(items, claude.FixItemsFromReview(review)...)
+		}
+		if comments, ok := h.comments[pr.Number]; ok {
+			items = append(items, claude.FixItemsFromComments(comments)...)
+		}
+		if len(items) == 0 {
+			h.showError("No findings to fix — run a review (c) or load comments (Tab) first")
+			return clearErrorAfter(3 * time.Second)
+		}
+
+		h.fixItems = items
+		h.fixSelected = make([]bool, len(items))
+		h.fixCursor = 0
+		h.state = stateFixSelect
+
 	case "tab":
 		switch s.detailMode {
 		case detailInfo:
@@ -91,6 +127,8 @@ func (s *prScreen) HandleKey(h *home, key string) tea.Cmd {
 					return fetchCommentsCmd(h.repoDir, pr.Number)
 				}
 			}
+		case detailComments:
+			s.detailMode = detailFix
 		default:
 			s.detailMode = detailInfo
 		}
@@ -191,6 +229,7 @@ func (s *prScreen) Hints() []ui.KeyHint {
 		{Key: "j/k", Desc: "navigate"},
 		{Key: "w", Desc: "worktree"},
 		{Key: "c", Desc: "review"},
+		{Key: "F", Desc: "fix"},
 		{Key: "t", Desc: "tmux"},
 		{Key: "A", Desc: "approve"},
 		{Key: "o", Desc: "open"},
@@ -247,6 +286,20 @@ func (s *prScreen) viewDashboard(h *home, height int) string {
 			detailView = s.detail.ViewComments(pr, comments)
 		} else {
 			detailView = s.detail.ViewComments(nil, nil)
+		}
+	} else if s.detailMode == detailFix {
+		if pr != nil {
+			if _, fixing := h.fixing[pr.Number]; fixing {
+				step := h.fixStep[pr.Number]
+				detailView = s.detail.ViewFixing(pr, h.spinner.View(), step)
+			} else if output, ok := h.fixResults[pr.Number]; ok {
+				detailView = s.detail.ViewFixResult(pr, output)
+			} else {
+				_, hasWT := h.worktrees[pr.Number]
+				detailView = s.detail.ViewFixEmpty(pr, hasWT)
+			}
+		} else {
+			detailView = s.detail.ViewFixEmpty(nil, false)
 		}
 	} else {
 		detailView = s.detail.View(pr)

@@ -236,6 +236,71 @@ func (d *PRDetail) ViewReviewing(pr *gh.PR, spinnerView, stepName string) string
 	return DetailPanelStyle.Width(d.Width).Height(d.Height).Render(content)
 }
 
+// ViewFixResult renders the fix agent output panel.
+func (d *PRDetail) ViewFixResult(pr *gh.PR, output string) string {
+	if pr == nil {
+		content := DimStyle.Render("No PR selected")
+		return DetailPanelStyle.Width(d.Width).Height(d.Height).Render(content)
+	}
+
+	var sections []string
+
+	sections = append(sections, TitleStyle.Render(fmt.Sprintf("#%d Fix Results", pr.Number)))
+	sections = append(sections, "")
+	sections = append(sections, CIStyle("pass").Render("  Fix agent completed"))
+	sections = append(sections, "")
+	sections = append(sections, SectionHeaderStyle.Render("  Agent Output"))
+	sections = append(sections, "")
+
+	maxWidth := d.Width - 4
+	wrapped := wrapText(output, maxWidth)
+	for _, line := range strings.Split(wrapped, "\n") {
+		sections = append(sections, "  "+line)
+	}
+
+	content := strings.Join(sections, "\n")
+	return DetailPanelStyle.Width(d.Width).Height(d.Height).Render(content)
+}
+
+// ViewFixing renders the "fix in progress" view.
+func (d *PRDetail) ViewFixing(pr *gh.PR, spinnerView, stepName string) string {
+	if pr == nil {
+		content := DimStyle.Render("No PR selected")
+		return DetailPanelStyle.Width(d.Width).Height(d.Height).Render(content)
+	}
+
+	var sections []string
+
+	sections = append(sections, TitleStyle.Render(fmt.Sprintf("#%d Fix in Progress", pr.Number)))
+	sections = append(sections, "")
+	sections = append(sections, fmt.Sprintf("  %s %s", spinnerView, stepName))
+
+	content := strings.Join(sections, "\n")
+	return DetailPanelStyle.Width(d.Width).Height(d.Height).Render(content)
+}
+
+// ViewFixEmpty renders the empty fix panel with guidance.
+func (d *PRDetail) ViewFixEmpty(pr *gh.PR, hasWorktree bool) string {
+	if pr == nil {
+		content := DimStyle.Render("No PR selected")
+		return DetailPanelStyle.Width(d.Width).Height(d.Height).Render(content)
+	}
+
+	var sections []string
+
+	sections = append(sections, TitleStyle.Render(fmt.Sprintf("#%d Fix Results", pr.Number)))
+	sections = append(sections, "")
+
+	if hasWorktree {
+		sections = append(sections, DimStyle.Render("  No fix results. Press F to fix review findings."))
+	} else {
+		sections = append(sections, DimStyle.Render("  No fix results. Press w to create a worktree first."))
+	}
+
+	content := strings.Join(sections, "\n")
+	return DetailPanelStyle.Width(d.Width).Height(d.Height).Render(content)
+}
+
 // ViewComments renders the PR comments panel.
 func (d *PRDetail) ViewComments(pr *gh.PR, comments []gh.Comment) string {
 	if pr == nil {

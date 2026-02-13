@@ -19,11 +19,12 @@ import (
 type state int
 
 const (
-	stateDefault state = iota
+	stateDefault   state = iota
 	stateLoading
 	stateConfirm
 	stateHelp
 	stateInput
+	stateFixSelect // Finding selection overlay for fix agent
 )
 
 // detailMode controls what the right panel displays.
@@ -33,6 +34,7 @@ const (
 	detailInfo     detailMode = iota // PR metadata
 	detailReview                     // Review results
 	detailComments                   // PR comments
+	detailFix                        // Fix agent results
 )
 
 // confirmAction tracks what the confirmation dialog is for.
@@ -45,6 +47,7 @@ const (
 	confirmUpdateBranch
 	confirmPushBranch
 	confirmDeleteIssueWorktree
+	confirmFixCommitPush
 )
 
 // inputAction distinguishes what the text input is being used for.
@@ -146,6 +149,15 @@ type home struct {
 	// Watchlist AI summaries (pr number -> summary text)
 	watchlistSummaries map[int]string
 
+	// Fix agent state
+	fixItems    []claude.FixItem           // Available findings for selection
+	fixSelected []bool                     // Toggle state per item
+	fixCursor   int                        // Cursor position in selection list
+	fixing      map[int]context.CancelFunc // Fix agent in progress (pr number -> cancel)
+	fixStep     map[int]string             // Current fix step text
+	fixResults  map[int]string             // Fix agent output (pr number -> output)
+	fixMsgIdx   int                        // Fun fix spinner rotation
+
 	// Config
 	cfg *config.Config
 }
@@ -177,6 +189,9 @@ func newHome() home {
 		creatingIssueWorktrees: make(map[int]bool),
 		issueTmuxSessions:      make(map[int]*claude.TmuxSession),
 		watchlistSummaries:     make(map[int]string),
+		fixing:                 make(map[int]context.CancelFunc),
+		fixStep:                make(map[int]string),
+		fixResults:             make(map[int]string),
 	}
 }
 
@@ -204,7 +219,7 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, nil
 
 	case spinner.TickMsg:
-		if h.loading || len(h.reviewing) > 0 || len(h.creatingWorktrees) > 0 || len(h.creatingIssueWorktrees) > 0 {
+		if h.loading || len(h.reviewing) > 0 || len(h.fixing) > 0 || len(h.creatingWorktrees) > 0 || len(h.creatingIssueWorktrees) > 0 {
 			var cmd tea.Cmd
 			h.spinner, cmd = h.spinner.Update(msg)
 			cmds = append(cmds, cmd)
@@ -330,6 +345,42 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			cmds = append(cmds, reviewSpinnerTick())
 		}
+
+	case fixDoneMsg:
+		h.fixResults[msg.prNumber] = msg.output
+		delete(h.fixing, msg.prNumber)
+		delete(h.fixStep, msg.prNumber)
+		h.pr.detailMode = detailFix
+		h.state = stateConfirm
+		h.confirmAction = confirmFixCommitPush
+		h.confirmMsg = fmt.Sprintf("Commit and push fixes for PR #%d? (y/n)", msg.prNumber)
+
+	case fixErrorMsg:
+		delete(h.fixing, msg.prNumber)
+		delete(h.fixStep, msg.prNumber)
+		h.showError(fmt.Sprintf("Fix failed for PR #%d: %v", msg.prNumber, msg.err))
+		cmds = append(cmds, clearErrorAfter(5*time.Second))
+
+	case fixProgressMsg:
+		h.fixStep[msg.prNumber] = msg.step
+
+	case fixSpinnerTickMsg:
+		if len(h.fixing) > 0 {
+			h.fixMsgIdx++
+			msg := funFixMessages[h.fixMsgIdx%len(funFixMessages)]
+			for prNum := range h.fixing {
+				h.fixStep[prNum] = msg
+			}
+			cmds = append(cmds, fixSpinnerTick())
+		}
+
+	case fixCommitPushDoneMsg:
+		h.showInfo(fmt.Sprintf("Fixes committed and pushed for PR #%d", msg.prNumber))
+		cmds = append(cmds, clearErrorAfter(3*time.Second))
+
+	case fixCommitPushErrorMsg:
+		h.showError(fmt.Sprintf("Fix commit/push failed for PR #%d: %v", msg.prNumber, msg.err))
+		cmds = append(cmds, clearErrorAfter(5*time.Second))
 
 	case prApprovedMsg:
 		h.showInfo(fmt.Sprintf("PR #%d approved", msg.prNumber))
@@ -561,6 +612,9 @@ func (h *home) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case stateInput:
 		return h.handleInputKey(msg)
 
+	case stateFixSelect:
+		return h.handleFixSelectKey(key)
+
 	case stateLoading:
 		if key == "q" {
 			return tea.Quit
@@ -632,8 +686,20 @@ func (h *home) handleConfirmKey(key string) tea.Cmd {
 			if issue != nil {
 				return deleteIssueWorktreeCmd(h.wtManager, issue.Number)
 			}
+		case confirmFixCommitPush:
+			pr := h.pr.prList.SelectedPR()
+			if pr != nil {
+				wtPath := h.worktrees[pr.Number]
+				return fixCommitPushCmd(wtPath, pr.Number)
+			}
 		}
 	case "n", "esc":
+		if h.confirmAction == confirmFixCommitPush {
+			h.state = stateDefault
+			h.confirmAction = confirmNone
+			h.showInfo("Changes left in worktree for manual inspection")
+			return clearErrorAfter(3 * time.Second)
+		}
 		h.state = stateDefault
 		h.confirmAction = confirmNone
 	}
@@ -715,6 +781,8 @@ func (h home) View() string {
 		mainContent = h.viewConfirmOverlay(mainContent, panelHeight)
 	} else if h.state == stateInput {
 		mainContent = h.viewInputOverlay(mainContent, panelHeight)
+	} else if h.state == stateFixSelect {
+		mainContent = h.viewFixSelectOverlay(mainContent, panelHeight)
 	}
 
 	// Menu bar with screen indicator
@@ -725,6 +793,8 @@ func (h home) View() string {
 		hints = ui.ConfirmHints()
 	case stateInput:
 		hints = ui.InputHints()
+	case stateFixSelect:
+		hints = ui.FixSelectHints()
 	default:
 		switch h.active {
 		case screenReviews:
