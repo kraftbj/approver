@@ -162,6 +162,7 @@ func (h home) Init() tea.Cmd {
 		h.spinner.Tick,
 		fetchPRsCmd(h.repoDir),
 		scanWorktreesCmd(h.wtManager),
+		loadReviewsCmd(),
 	)
 }
 
@@ -259,11 +260,19 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.showError(fmt.Sprintf("Failed to add PR: %v", msg.err))
 		cmds = append(cmds, clearErrorAfter(3*time.Second))
 
+	case reviewsLoadedMsg:
+		for prNumber, review := range msg.reviews {
+			h.reviews[prNumber] = review
+		}
+		h.reconcileClaudeState()
+
 	case claudeReviewDoneMsg:
 		h.reviews[msg.prNumber] = msg.review
 		delete(h.reviewing, msg.prNumber)
 		delete(h.reviewStep, msg.prNumber)
 		h.reconcileClaudeState()
+		// Persist to disk
+		saveReviewResult(msg.prNumber, msg.review)
 
 	case claudeReviewErrorMsg:
 		delete(h.reviewing, msg.prNumber)
