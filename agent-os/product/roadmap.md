@@ -1,6 +1,6 @@
 # Product Roadmap
 
-## Phase 1: Core MVP
+## Phase 1: Core MVP [DONE]
 
 - **PR Dashboard** - Fetch and display PRs requesting your review via `gh pr list --search "review-requested:@me"`
 - **Worktree Management** - Create/delete git worktrees for each PR branch
@@ -28,17 +28,17 @@
 - ~~**Tmux detach hint**~~ [DONE] - tmux status bar shows "Ctrl+b d: back to Approver"
 - ~~**Fun review spinner**~~ [DONE] - Rotates through playful messages every 4 seconds during review
 
-## Phase 3: GitHub Feedback Loop
+## Phase 3: GitHub Feedback Loop [DONE]
 
-- **Background Poller** - Poll GitHub every N minutes for new comments, CI status changes, mergeability
-- **Inline Comment Drafting** - Create draft inline comments on specific files/lines
-- **Review Posting** - Submit draft reviews (approve/request changes/comment) via `gh api`
-- **Comment Viewer** - Show existing PR comments and conversation threads
+- ~~**Comment Viewer**~~ [DONE] - Tab cycles info/review/comments; shows author, time, body for each comment
+- ~~**Review Posting**~~ [DONE] - `X` key requests changes with single-line reason input
+- ~~**Background Poller**~~ [DONE] - Polls every `poll_interval` seconds (default 300, configurable, 0 = off)
+- **Inline Comment Drafting** - Needs file/line browser UX design (deferred)
 
-## Phase 4: Polish
+## Phase 4: Polish [DONE]
 
-- **Setup Scripts** - Configurable per-repo setup command run in each worktree
-- **Notifications** - Visual indicators when PR state changes (new comment, CI passed/failed)
-- **Multi-Repo** - Support reviewing PRs across multiple repos
-- **Persistence** - Remember reviewed PRs, preserve draft comments across sessions
-- **Update Branch to Trunk** - One-key merge of base branch into PR worktree and push (`u` key)
+- ~~**Setup Scripts**~~ [DONE] - Configurable per-repo setup command run in each worktree
+- ~~**Notifications**~~ [DONE] - Yellow `!` badge when comment count, CI, or review decision changes between polls
+- ~~**Persistence**~~ [DONE] - Review results saved to ~/.config/approver/reviews/ and restored on startup
+- ~~**Update Branch to Trunk**~~ [DONE] - `u` key merges origin/{base} into worktree, offers to push
+- **Multi-Repo** - Needs config model for multiple repo dirs (deferred)
