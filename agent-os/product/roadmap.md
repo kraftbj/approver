@@ -28,7 +28,7 @@
 - **Persistence** - Review results saved to ~/.config/approver/reviews/ and restored on startup
 - **Update Branch to Trunk** - `u` key merges origin/{base} into worktree, offers to push
 
-## Phase 5: Multi-Screen Infrastructure
+## Phase 5: Multi-Screen Infrastructure [DONE]
 
 - **Screen interface** - `Screen` with `HandleKey()`/`View()`, `home` stays as tea.Model dispatcher
 - **Screen switching** - `1`/`2`/`3` keys switch between Reviews, Issues, Watchlist
@@ -36,7 +36,7 @@
 - **PR screen extraction** - PR-specific UI logic extracted from `handleDefaultKey` into `prScreen`
 - **Shared state** - All domain state (worktrees, reviews, config) stays in `home`
 
-## Phase 6: Issues Screen
+## Phase 6: Issues Screen [DONE]
 
 - **Fetch assigned issues** - `gh issue list --assignee @me` with JSON output
 - **Issue list + detail** - Two-panel layout matching PR screen pattern
@@ -45,7 +45,7 @@
 - **Manual additions** - `a` key to add issues by number/URL
 - **Persistence** - `tracked-issues.json` for manually-added issues
 
-## Phase 7: Watchlist Screen
+## Phase 7: Watchlist Screen [DONE]
 
 - **Merge manual tracking** - Migrate manually-tracked PRs from Reviews to Watchlist
 - **Reviews cleanup** - Remove `a`/`d` keys from Reviews (review-requests only)
