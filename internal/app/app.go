@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	gh "github.com/kraft/approver/internal/github"
 	"github.com/kraft/approver/internal/ui"
+	"github.com/kraft/approver/internal/worktree"
 )
 
 type state int
@@ -57,6 +58,9 @@ type home struct {
 
 	// Worktree state (pr number -> path)
 	worktrees map[int]string
+
+	// Worktree manager
+	wtManager *worktree.Manager
 }
 
 func newHome() home {
@@ -80,6 +84,7 @@ func (h home) Init() tea.Cmd {
 	return tea.Batch(
 		h.spinner.Tick,
 		fetchPRsCmd(h.repoDir),
+		scanWorktreesCmd(h.wtManager),
 	)
 }
 
@@ -131,6 +136,10 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case worktreeDeletedMsg:
 		delete(h.worktrees, msg.prNumber)
+		h.reconcileWorktrees()
+
+	case worktreesScanMsg:
+		h.worktrees = msg.worktrees
 		h.reconcileWorktrees()
 
 	case worktreeErrorMsg:
@@ -220,7 +229,7 @@ func (h *home) handleDefaultKey(key string) tea.Cmd {
 				h.showError(fmt.Sprintf("Worktree already exists for PR #%d", pr.Number))
 				return clearErrorAfter(3 * time.Second)
 			}
-			return createWorktreeCmd(pr.Number, pr.HeadRefName, h.repoDir)
+			return createWorktreeCmd(h.wtManager, pr.Number, pr.HeadRefName)
 		}
 
 	case "W":
@@ -264,7 +273,7 @@ func (h *home) handleConfirmKey(key string) tea.Cmd {
 		if h.confirmAction == confirmDeleteWorktree {
 			pr := h.prList.SelectedPR()
 			if pr != nil {
-				return deleteWorktreeCmd(pr.Number, h.repoDir)
+				return deleteWorktreeCmd(h.wtManager, pr.Number)
 			}
 		}
 	case "n", "esc":
@@ -534,17 +543,35 @@ func openInBrowserCmd(prNumber int, repoDir string) tea.Cmd {
 	}
 }
 
-// Worktree command stubs - will be implemented in Task 6
-func createWorktreeCmd(prNumber int, branch string, repoDir string) tea.Cmd {
+func createWorktreeCmd(mgr *worktree.Manager, prNumber int, branch string) tea.Cmd {
 	return func() tea.Msg {
-		return worktreeErrorMsg{err: fmt.Errorf("worktree management not yet initialized")}
+		path, err := mgr.Create(prNumber, branch)
+		if err != nil {
+			return worktreeErrorMsg{err: err}
+		}
+		return worktreeCreatedMsg{prNumber: prNumber, path: path}
 	}
 }
 
-func deleteWorktreeCmd(prNumber int, repoDir string) tea.Cmd {
+func deleteWorktreeCmd(mgr *worktree.Manager, prNumber int) tea.Cmd {
 	return func() tea.Msg {
-		return worktreeErrorMsg{err: fmt.Errorf("worktree management not yet initialized")}
+		if err := mgr.Delete(prNumber); err != nil {
+			return worktreeErrorMsg{err: err}
+		}
+		return worktreeDeletedMsg{prNumber: prNumber}
 	}
+}
+
+func scanWorktreesCmd(mgr *worktree.Manager) tea.Cmd {
+	return func() tea.Msg {
+		wts, _ := mgr.ScanExisting()
+		return worktreesScanMsg{worktrees: wts}
+	}
+}
+
+// worktreesScanMsg carries the initial worktree scan results.
+type worktreesScanMsg struct {
+	worktrees map[int]string
 }
 
 func removeTrackedPRCmd(prNumber int) tea.Cmd {
@@ -568,7 +595,17 @@ func Run() error {
 		os.Exit(1)
 	}
 
-	p := tea.NewProgram(newHome(), tea.WithAltScreen())
-	_, err := p.Run()
+	// Determine repo directory
+	repoDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("getting working directory: %w", err)
+	}
+
+	h := newHome()
+	h.repoDir = repoDir
+	h.wtManager = worktree.NewManager(repoDir)
+
+	p := tea.NewProgram(h, tea.WithAltScreen())
+	_, err = p.Run()
 	return err
 }
