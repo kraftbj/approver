@@ -9,7 +9,7 @@ import (
 )
 
 // ghPRFields is the set of fields we request from gh pr list/view.
-const ghPRFields = "number,title,author,headRefName,url,reviewDecision,statusCheckRollup,labels,additions,deletions,updatedAt"
+const ghPRFields = "number,title,author,headRefName,baseRefName,url,reviewDecision,statusCheckRollup,labels,additions,deletions,updatedAt,reviewRequests,latestReviews"
 
 // FetchPRs fetches all PRs where the current user's review is requested.
 // repoDir is used as the working directory for the gh command (determines which repo).
@@ -82,7 +82,9 @@ func CheckGH() error {
 		return fmt.Errorf("gh CLI not found. Install it from https://cli.github.com/")
 	}
 
-	cmd := exec.Command("gh", "auth", "status")
+	// Use "gh auth token" - exits 0 and prints token if authenticated,
+	// exits 1 if not. Simpler and more reliable than "gh auth status".
+	cmd := exec.Command("gh", "auth", "token")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("gh is not authenticated. Run 'gh auth login' first")
 	}
@@ -100,6 +102,23 @@ func CheckGitRepo(dir string) error {
 		return fmt.Errorf("not a git repository. Run approver from within a git repo")
 	}
 	return nil
+}
+
+// DetectDefaultBranch returns the default branch name for the repo (e.g., "main", "trunk").
+func DetectDefaultBranch(repoDir string) (string, error) {
+	cmd := exec.Command("gh", "repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name")
+	if repoDir != "" {
+		cmd.Dir = repoDir
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		return "main", nil // fallback
+	}
+	branch := strings.TrimSpace(string(out))
+	if branch == "" {
+		return "main", nil
+	}
+	return branch, nil
 }
 
 // ParseRepoFromDir extracts the repo owner/name from a git directory.

@@ -39,6 +39,9 @@ func (d *PRDetail) View(pr *gh.PR) string {
 	// Metadata
 	sections = append(sections, fmt.Sprintf("  Author:   @%s", pr.Author.Login))
 	sections = append(sections, fmt.Sprintf("  Branch:   %s", pr.HeadRefName))
+	if pr.BaseRefName != "" {
+		sections = append(sections, fmt.Sprintf("  Base:     %s", pr.BaseRefName))
+	}
 	sections = append(sections, fmt.Sprintf("  URL:      %s", pr.URL))
 	sections = append(sections, fmt.Sprintf("  Updated:  %s", pr.RelativeTime()))
 	sections = append(sections, fmt.Sprintf("  Size:     %s", pr.SizeString()))
@@ -50,19 +53,44 @@ func (d *PRDetail) View(pr *gh.PR) string {
 	sections = append(sections, fmt.Sprintf("  Review:   %s", reviewStyled))
 	sections = append(sections, "")
 
+	// Reviewers
+	reviewers := pr.ReviewerSummary()
+	if len(reviewers) > 0 {
+		for _, r := range reviewers {
+			name := r.Name
+			if r.Team {
+				name = name + " (team)"
+			}
+			var styled string
+			switch r.State {
+			case "approved":
+				styled = CIStyle("pass").Render(fmt.Sprintf("  %s: approved", name))
+			case "changes":
+				styled = CIStyle("fail").Render(fmt.Sprintf("  %s: changes requested", name))
+			case "commented":
+				styled = CIStyle("pending").Render(fmt.Sprintf("  %s: commented", name))
+			default:
+				styled = DimStyle.Render(fmt.Sprintf("  %s: pending", name))
+			}
+			sections = append(sections, styled)
+		}
+		sections = append(sections, "")
+	}
+
 	// CI status - summary counts instead of listing every check
 	ciSummary := pr.CIStatus()
 	if len(pr.StatusChecks) > 0 {
-		passed, failed, pending := 0, 0, 0
+		passed, failed, pending, skipped := 0, 0, 0, 0
 		var failedNames []string
 		for _, check := range pr.StatusChecks {
-			switch {
-			case check.Conclusion == "SUCCESS" || check.Conclusion == "NEUTRAL" || check.Conclusion == "SKIPPED":
+			switch check.EffectiveState() {
+			case "pass":
 				passed++
-			case check.Conclusion == "FAILURE" || check.Conclusion == "ERROR" ||
-				check.Conclusion == "TIMED_OUT" || check.Conclusion == "CANCELLED":
+			case "fail":
 				failed++
-				failedNames = append(failedNames, check.Name)
+				failedNames = append(failedNames, check.DisplayName())
+			case "skipped":
+				skipped++
 			default:
 				pending++
 			}
@@ -77,6 +105,9 @@ func (d *PRDetail) View(pr *gh.PR) string {
 		}
 		if pending > 0 {
 			parts = append(parts, CIStyle("pending").Render(fmt.Sprintf("%d pending", pending)))
+		}
+		if skipped > 0 {
+			parts = append(parts, DimStyle.Render(fmt.Sprintf("%d skipped", skipped)))
 		}
 
 		ciLine := fmt.Sprintf("  CI:       %s", strings.Join(parts, ", "))

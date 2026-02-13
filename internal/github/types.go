@@ -11,6 +11,7 @@ type PR struct {
 	Title          string         `json:"title"`
 	Author         Author         `json:"author"`
 	HeadRefName    string         `json:"headRefName"`
+	BaseRefName    string         `json:"baseRefName"`
 	URL            string         `json:"url"`
 	ReviewDecision string         `json:"reviewDecision"`
 	StatusChecks   StatusChecks   `json:"statusCheckRollup"`
@@ -18,6 +19,10 @@ type PR struct {
 	Additions      int            `json:"additions"`
 	Deletions      int            `json:"deletions"`
 	UpdatedAt      time.Time      `json:"updatedAt"`
+
+	// Review data
+	ReviewRequests []ReviewRequest `json:"reviewRequests"`
+	LatestReviews  []Review        `json:"latestReviews"`
 
 	// Source indicates how this PR was added to the list.
 	// "review-requested" for auto-fetched, "manual" for user-added.
@@ -38,11 +43,139 @@ type Label struct {
 type StatusChecks []StatusCheck
 
 type StatusCheck struct {
+	// CheckRun fields
 	Name       string `json:"name"`
 	Status     string `json:"status"`
 	Conclusion string `json:"conclusion"`
+	// StatusContext fields
+	Context string `json:"context"`
+	State   string `json:"state"`
 	// __typename distinguishes CheckRun vs StatusContext
 	TypeName string `json:"__typename"`
+}
+
+// DisplayName returns the check name, handling both CheckRun and StatusContext types.
+func (c StatusCheck) DisplayName() string {
+	if c.Context != "" {
+		return c.Context
+	}
+	return c.Name
+}
+
+// EffectiveState normalizes the check result to "pass", "fail", "pending", or "skipped".
+func (c StatusCheck) EffectiveState() string {
+	if c.TypeName == "StatusContext" {
+		switch c.State {
+		case "SUCCESS":
+			return "pass"
+		case "FAILURE", "ERROR":
+			return "fail"
+		default:
+			return "pending"
+		}
+	}
+	// CheckRun
+	if c.Conclusion == "" {
+		return "pending"
+	}
+	switch c.Conclusion {
+	case "SUCCESS", "NEUTRAL":
+		return "pass"
+	case "SKIPPED":
+		return "skipped"
+	case "FAILURE", "ERROR", "TIMED_OUT", "CANCELLED":
+		return "fail"
+	default:
+		return "pending"
+	}
+}
+
+// Review types
+
+type ReviewRequest struct {
+	TypeName string `json:"__typename"`
+	Login    string `json:"login"`
+	Name     string `json:"name"`
+}
+
+type Review struct {
+	Author struct {
+		Login string `json:"login"`
+	} `json:"author"`
+	State string `json:"state"`
+}
+
+type ReviewerStatus struct {
+	Name  string
+	State string // "pending", "approved", "changes", "commented"
+	Team  bool
+}
+
+// ReviewerSummary builds a list of reviewers with their current state.
+func (pr *PR) ReviewerSummary() []ReviewerStatus {
+	// Build map of latest review state by login
+	reviewed := make(map[string]string)
+	for _, r := range pr.LatestReviews {
+		var state string
+		switch r.State {
+		case "APPROVED":
+			state = "approved"
+		case "CHANGES_REQUESTED":
+			state = "changes"
+		case "COMMENTED":
+			state = "commented"
+		case "DISMISSED":
+			state = "pending"
+		default:
+			continue
+		}
+		reviewed[r.Author.Login] = state
+	}
+
+	var result []ReviewerStatus
+	seen := make(map[string]bool)
+
+	// Start with requested reviewers
+	for _, req := range pr.ReviewRequests {
+		name := req.Login
+		isTeam := req.TypeName == "Team"
+		if isTeam {
+			name = req.Name
+			if name == "" {
+				name = req.Login
+			}
+		}
+		if name == "" {
+			continue
+		}
+
+		key := name
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+
+		state := "pending"
+		if !isTeam {
+			if s, ok := reviewed[req.Login]; ok {
+				state = s
+			}
+		}
+		result = append(result, ReviewerStatus{Name: name, State: state, Team: isTeam})
+	}
+
+	// Add reviewers who submitted reviews but aren't in the request list
+	for _, r := range pr.LatestReviews {
+		login := r.Author.Login
+		if login == "" || seen[login] {
+			continue
+		}
+		seen[login] = true
+		state := reviewed[login]
+		result = append(result, ReviewerStatus{Name: login, State: state})
+	}
+
+	return result
 }
 
 // CIStatus returns a summary of CI check status: "pass", "fail", "pending", or "none".
@@ -53,14 +186,13 @@ func (pr *PR) CIStatus() string {
 
 	hasPending := false
 	for _, check := range pr.StatusChecks {
-		switch {
-		case check.Conclusion == "FAILURE" || check.Conclusion == "ERROR" ||
-			check.Conclusion == "TIMED_OUT" || check.Conclusion == "CANCELLED":
+		switch check.EffectiveState() {
+		case "fail":
 			return "fail"
-		case check.Status == "IN_PROGRESS" || check.Status == "QUEUED" ||
-			check.Status == "PENDING" || check.Conclusion == "":
+		case "pending":
 			hasPending = true
 		}
+		// "pass" and "skipped" don't affect overall status
 	}
 
 	if hasPending {

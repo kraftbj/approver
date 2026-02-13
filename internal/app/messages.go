@@ -44,3 +44,21 @@ type prAddedMsg struct {
 type prAddErrorMsg struct {
 	err error
 }
+
+// defaultBranchMsg carries the detected default branch name.
+type defaultBranchMsg struct {
+	branch string
+}
+
+// trunkFetchedMsg is sent after background fetch of the default branch completes.
+type trunkFetchedMsg struct{}
+
+// branchUpdatedMsg is sent after a successful merge+push of trunk into a PR branch.
+type branchUpdatedMsg struct {
+	prNumber int
+}
+
+// branchUpdateErrorMsg is sent when the update-branch operation fails.
+type branchUpdateErrorMsg struct {
+	err error
+}

@@ -33,6 +33,7 @@ func DefaultHints() []KeyHint {
 		{"a", "add PR"},
 		{"w", "worktree"},
 		{"W", "delete worktree"},
+		{"u", "update"},
 		{"R", "refresh"},
 		{"o", "open"},
 		{"?", "help"},
