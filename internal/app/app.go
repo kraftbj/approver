@@ -43,6 +43,8 @@ const (
 	confirmNone confirmAction = iota
 	confirmDeleteWorktree
 	confirmApprove
+	confirmUpdateBranch
+	confirmPushBranch
 )
 
 // inputAction distinguishes what the text input is being used for.
@@ -296,6 +298,29 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.showError(fmt.Sprintf("Failed to approve PR #%d: %v", msg.prNumber, msg.err))
 		cmds = append(cmds, clearErrorAfter(5*time.Second))
 
+	case branchUpdatedMsg:
+		h.showError(fmt.Sprintf("Branch updated for PR #%d", msg.prNumber))
+		cmds = append(cmds, clearErrorAfter(3*time.Second))
+		// Offer to push
+		pr := h.prList.SelectedPR()
+		if pr != nil && pr.Number == msg.prNumber {
+			h.state = stateConfirm
+			h.confirmAction = confirmPushBranch
+			h.confirmMsg = fmt.Sprintf("Push to origin? (y/n)")
+		}
+
+	case branchUpdateErrorMsg:
+		h.showError(fmt.Sprintf("Failed to update branch for PR #%d: %v", msg.prNumber, msg.err))
+		cmds = append(cmds, clearErrorAfter(5*time.Second))
+
+	case branchPushedMsg:
+		h.showError(fmt.Sprintf("Branch pushed for PR #%d", msg.prNumber))
+		cmds = append(cmds, clearErrorAfter(3*time.Second))
+
+	case branchPushErrorMsg:
+		h.showError(fmt.Sprintf("Failed to push branch for PR #%d: %v", msg.prNumber, msg.err))
+		cmds = append(cmds, clearErrorAfter(5*time.Second))
+
 	case pollTickMsg:
 		// Don't poll while loading to avoid stacking requests
 		if !h.loading {
@@ -528,6 +553,18 @@ func (h *home) handleDefaultKey(key string) tea.Cmd {
 		}
 		return h.startTmux(pr.Number, wtPath)
 
+	case "u":
+		pr := h.prList.SelectedPR()
+		if pr != nil {
+			if _, exists := h.worktrees[pr.Number]; !exists {
+				h.showError(fmt.Sprintf("No worktree for PR #%d — create one first with w", pr.Number))
+				return clearErrorAfter(3 * time.Second)
+			}
+			h.state = stateConfirm
+			h.confirmAction = confirmUpdateBranch
+			h.confirmMsg = fmt.Sprintf("Merge origin/%s into worktree for PR #%d? (y/n)", pr.BaseRefName, pr.Number)
+		}
+
 	case "X":
 		pr := h.prList.SelectedPR()
 		if pr != nil {
@@ -568,6 +605,18 @@ func (h *home) handleConfirmKey(key string) tea.Cmd {
 			pr := h.prList.SelectedPR()
 			if pr != nil {
 				return approvePRCmd(h.repoDir, pr.Number)
+			}
+		case confirmUpdateBranch:
+			pr := h.prList.SelectedPR()
+			if pr != nil {
+				wtPath := h.worktrees[pr.Number]
+				return updateBranchCmd(wtPath, pr.BaseRefName, pr.Number)
+			}
+		case confirmPushBranch:
+			pr := h.prList.SelectedPR()
+			if pr != nil {
+				wtPath := h.worktrees[pr.Number]
+				return pushBranchCmd(wtPath, pr.HeadRefName, pr.Number)
 			}
 		}
 	case "n", "esc":
@@ -746,6 +795,7 @@ func (h *home) viewHelp(height int) string {
                      (Ctrl+b d to detach back to Approver)
     A              Approve PR (with confirmation)
     X              Request changes (with reason)
+    u              Update branch (merge base into worktree)
     o              Open PR in browser
     R              Refresh PR list
 
@@ -1096,6 +1146,31 @@ func reviewSpinnerTick() tea.Cmd {
 	return tea.Tick(4*time.Second, func(time.Time) tea.Msg {
 		return reviewSpinnerTickMsg{}
 	})
+}
+
+func updateBranchCmd(wtPath, baseBranch string, prNumber int) tea.Cmd {
+	return func() tea.Msg {
+		// Fetch the base branch and merge it
+		fetchCmd := exec.Command("git", "-C", wtPath, "fetch", "origin", baseBranch)
+		if out, err := fetchCmd.CombinedOutput(); err != nil {
+			return branchUpdateErrorMsg{prNumber: prNumber, err: fmt.Errorf("fetch: %s", string(out))}
+		}
+		mergeCmd := exec.Command("git", "-C", wtPath, "merge", fmt.Sprintf("origin/%s", baseBranch))
+		if out, err := mergeCmd.CombinedOutput(); err != nil {
+			return branchUpdateErrorMsg{prNumber: prNumber, err: fmt.Errorf("merge: %s", string(out))}
+		}
+		return branchUpdatedMsg{prNumber: prNumber}
+	}
+}
+
+func pushBranchCmd(wtPath, headBranch string, prNumber int) tea.Cmd {
+	return func() tea.Msg {
+		cmd := exec.Command("git", "-C", wtPath, "push", "origin", "HEAD")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return branchPushErrorMsg{prNumber: prNumber, err: fmt.Errorf("%s", string(out))}
+		}
+		return branchPushedMsg{prNumber: prNumber}
+	}
 }
 
 func requestChangesPRCmd(repoDir string, prNumber int, body string) tea.Cmd {

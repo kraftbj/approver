@@ -38,6 +38,7 @@ func DefaultHints() []KeyHint {
 		{"R", "refresh"},
 		{"A", "approve"},
 		{"X", "request changes"},
+		{"u", "update branch"},
 		{"o", "open"},
 		{"?", "help"},
 		{"q", "quit"},

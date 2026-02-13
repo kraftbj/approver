@@ -107,6 +107,28 @@ type prChangesRequestErrorMsg struct {
 	err      error
 }
 
+// branchUpdatedMsg is sent when a worktree branch is updated from trunk.
+type branchUpdatedMsg struct {
+	prNumber int
+}
+
+// branchUpdateErrorMsg is sent when updating a branch fails.
+type branchUpdateErrorMsg struct {
+	prNumber int
+	err      error
+}
+
+// branchPushedMsg is sent when a worktree branch is pushed to origin.
+type branchPushedMsg struct {
+	prNumber int
+}
+
+// branchPushErrorMsg is sent when pushing a branch fails.
+type branchPushErrorMsg struct {
+	prNumber int
+	err      error
+}
+
 // pollTickMsg signals that a background poll interval has elapsed.
 type pollTickMsg struct{}
 
