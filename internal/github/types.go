@@ -252,6 +252,15 @@ func (pr *PR) RelativeTime() string {
 	return relativeTime(pr.UpdatedAt)
 }
 
+// LinkedPR represents a PR linked to an issue via "Fixes #N" or manual linking.
+type LinkedPR struct {
+	Number      int    `json:"number"`
+	Title       string `json:"title"`
+	State       string `json:"state"`
+	URL         string `json:"url"`
+	HeadRefName string `json:"headRefName"`
+}
+
 // Issue represents a GitHub issue, matching the gh --json output format.
 type Issue struct {
 	Number    int       `json:"number"`
@@ -263,6 +272,9 @@ type Issue struct {
 	Body      string    `json:"body"`
 	URL       string    `json:"url"`
 	UpdatedAt time.Time `json:"updatedAt"`
+
+	// LinkedPRs are PRs that reference/close this issue.
+	LinkedPRs []LinkedPR `json:"closedByPullRequestsReferences"`
 
 	// Source indicates how this issue was added.
 	// "assigned" for auto-fetched, "manual" for user-added.

@@ -61,6 +61,25 @@ func (d *IssueDetail) View(issue *gh.Issue) string {
 		sections = append(sections, "")
 	}
 
+	// Linked PRs
+	if len(issue.LinkedPRs) > 0 {
+		sections = append(sections, SectionHeaderStyle.Render("  Linked PRs"))
+		for _, lpr := range issue.LinkedPRs {
+			stateStyled := CIStyle("pass").Render(lpr.State)
+			if lpr.State == "CLOSED" {
+				stateStyled = CIStyle("fail").Render(lpr.State)
+			} else if lpr.State == "OPEN" {
+				stateStyled = CIStyle("pending").Render(lpr.State)
+			}
+			sections = append(sections, fmt.Sprintf("  #%d %s  %s", lpr.Number, lpr.Title, stateStyled))
+			if lpr.HeadRefName != "" {
+				sections = append(sections, DimStyle.Render(fmt.Sprintf("    branch: %s", lpr.HeadRefName)))
+			}
+		}
+		sections = append(sections, DimStyle.Render("  Press p to open linked PR in browser"))
+		sections = append(sections, "")
+	}
+
 	// Worktree status
 	if issue.HasWorktree {
 		sections = append(sections, CIStyle("pass").Render("  Worktree: active"))

@@ -122,6 +122,9 @@ func (l *IssueList) renderIssueItem(issue gh.Issue, selected bool, width int) (s
 	if issue.IsCreatingWorktree {
 		prefix += CIStyle("pending").Render("W")
 	}
+	if len(issue.LinkedPRs) > 0 {
+		prefix += CIStyle("pass").Render("P")
+	}
 
 	numberStr := fmt.Sprintf("#%d", issue.Number)
 	titleWidth := width - len(indicator) - len(numberStr) - len(prefix) - 2

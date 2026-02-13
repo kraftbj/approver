@@ -8,7 +8,7 @@ import (
 )
 
 // ghIssueFields is the set of fields we request from gh issue list/view.
-const ghIssueFields = "number,title,author,labels,assignees,state,body,url,updatedAt"
+const ghIssueFields = "number,title,author,labels,assignees,state,body,url,updatedAt,closedByPullRequestsReferences"
 
 // FetchIssues fetches all issues assigned to the current user.
 func FetchIssues(repoDir string) ([]Issue, error) {

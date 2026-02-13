@@ -739,6 +739,7 @@ func (h *home) viewHelp(height int) string {
     w              Create worktree for selected issue
     W              Delete worktree (with confirmation)
     c              Start Claude tmux session (auto-creates worktree)
+    p              Open linked PR in browser
     a              Add issue by number or URL
     d              Remove manually-tracked issue
 

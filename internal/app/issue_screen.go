@@ -57,6 +57,15 @@ func (s *issueScreen) HandleKey(h *home, key string) tea.Cmd {
 			return openInBrowserCmd(issue.URL)
 		}
 
+	case "p":
+		issue := s.issueList.SelectedIssue()
+		if issue != nil && len(issue.LinkedPRs) > 0 {
+			return openInBrowserCmd(issue.LinkedPRs[0].URL)
+		} else if issue != nil {
+			h.showError("No linked PR for this issue")
+			return clearErrorAfter(3 * time.Second)
+		}
+
 	case "w":
 		issue := s.issueList.SelectedIssue()
 		if issue != nil {
