@@ -249,7 +249,63 @@ func (pr *PR) SizeString() string {
 
 // RelativeTime returns a human-readable relative time like "2h ago" or "3d ago".
 func (pr *PR) RelativeTime() string {
-	d := time.Since(pr.UpdatedAt)
+	return relativeTime(pr.UpdatedAt)
+}
+
+// Issue represents a GitHub issue, matching the gh --json output format.
+type Issue struct {
+	Number    int       `json:"number"`
+	Title     string    `json:"title"`
+	Author    Author    `json:"author"`
+	Labels    []Label   `json:"labels"`
+	Assignees []Author  `json:"assignees"`
+	State     string    `json:"state"`
+	Body      string    `json:"body"`
+	URL       string    `json:"url"`
+	UpdatedAt time.Time `json:"updatedAt"`
+
+	// Source indicates how this issue was added.
+	// "assigned" for auto-fetched, "manual" for user-added.
+	Source string `json:"-"`
+
+	// HasWorktree is set at runtime by reconciling with worktree state.
+	HasWorktree bool `json:"-"`
+
+	// IsCreatingWorktree is set at runtime while a worktree is being created.
+	IsCreatingWorktree bool `json:"-"`
+
+	// HasTmux is set at runtime when a tmux Claude session exists.
+	HasTmux bool `json:"-"`
+
+	// IsWorking is set at runtime when an autonomous Claude session is running.
+	IsWorking bool `json:"-"`
+}
+
+// RelativeTime returns a human-readable relative time for an issue.
+func (issue *Issue) RelativeTime() string {
+	return relativeTime(issue.UpdatedAt)
+}
+
+// LabelNames returns a slice of label name strings.
+func (issue *Issue) LabelNames() []string {
+	names := make([]string, len(issue.Labels))
+	for i, l := range issue.Labels {
+		names[i] = l.Name
+	}
+	return names
+}
+
+// AssigneeLogins returns a slice of assignee login strings.
+func (issue *Issue) AssigneeLogins() []string {
+	logins := make([]string, len(issue.Assignees))
+	for i, a := range issue.Assignees {
+		logins[i] = a.Login
+	}
+	return logins
+}
+
+func relativeTime(t time.Time) string {
+	d := time.Since(t)
 	switch {
 	case d < time.Minute:
 		return "just now"
