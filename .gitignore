@@ -6,3 +6,6 @@ approver
 *.test
 *.out
 .DS_Store
+
+# Override global gitignore to track agent-os in this repo
+!agent-os/
