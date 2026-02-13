@@ -50,21 +50,44 @@ func (d *PRDetail) View(pr *gh.PR) string {
 	sections = append(sections, fmt.Sprintf("  Review:   %s", reviewStyled))
 	sections = append(sections, "")
 
-	// CI status
+	// CI status - summary counts instead of listing every check
 	ciSummary := pr.CIStatus()
-	ciStyled := CIStyle(ciSummary).Render(fmt.Sprintf("CI: %s", ciSummary))
-	sections = append(sections, fmt.Sprintf("  %s", ciStyled))
-
-	// Individual checks
 	if len(pr.StatusChecks) > 0 {
+		passed, failed, pending := 0, 0, 0
+		var failedNames []string
 		for _, check := range pr.StatusChecks {
-			checkStatus := check.Conclusion
-			if checkStatus == "" {
-				checkStatus = check.Status
+			switch {
+			case check.Conclusion == "SUCCESS" || check.Conclusion == "NEUTRAL" || check.Conclusion == "SKIPPED":
+				passed++
+			case check.Conclusion == "FAILURE" || check.Conclusion == "ERROR" ||
+				check.Conclusion == "TIMED_OUT" || check.Conclusion == "CANCELLED":
+				failed++
+				failedNames = append(failedNames, check.Name)
+			default:
+				pending++
 			}
-			icon := checkIcon(checkStatus)
-			sections = append(sections, fmt.Sprintf("    %s %s", icon, check.Name))
 		}
+
+		parts := []string{}
+		if passed > 0 {
+			parts = append(parts, CIStyle("pass").Render(fmt.Sprintf("%d pass", passed)))
+		}
+		if failed > 0 {
+			parts = append(parts, CIStyle("fail").Render(fmt.Sprintf("%d fail", failed)))
+		}
+		if pending > 0 {
+			parts = append(parts, CIStyle("pending").Render(fmt.Sprintf("%d pending", pending)))
+		}
+
+		ciLine := fmt.Sprintf("  CI:       %s", strings.Join(parts, ", "))
+		sections = append(sections, ciLine)
+
+		// Only show names of failed checks (the ones you actually care about)
+		for _, name := range failedNames {
+			sections = append(sections, CIStyle("fail").Render(fmt.Sprintf("            x %s", name)))
+		}
+	} else {
+		sections = append(sections, fmt.Sprintf("  CI:       %s", CIStyle(ciSummary).Render("none")))
 	}
 	sections = append(sections, "")
 
