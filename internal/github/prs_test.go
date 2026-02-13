@@ -292,6 +292,56 @@ func TestReviewerSummary(t *testing.T) {
 	}
 }
 
+const sampleCommentsJSON = `{
+  "comments": [
+    {
+      "author": {"login": "alice"},
+      "body": "Looks good, just a few nits.",
+      "createdAt": "2026-02-12T10:30:00Z",
+      "url": "https://github.com/org/repo/pull/142#issuecomment-1"
+    },
+    {
+      "author": {"login": "bob"},
+      "body": "Fixed the nits, PTAL.",
+      "createdAt": "2026-02-12T11:00:00Z",
+      "url": "https://github.com/org/repo/pull/142#issuecomment-2"
+    }
+  ]
+}`
+
+func TestFetchComments(t *testing.T) {
+	var result struct {
+		Comments []Comment `json:"comments"`
+	}
+	if err := json.Unmarshal([]byte(sampleCommentsJSON), &result); err != nil {
+		t.Fatalf("failed to parse sample comments JSON: %v", err)
+	}
+
+	comments := result.Comments
+	if len(comments) != 2 {
+		t.Fatalf("expected 2 comments, got %d", len(comments))
+	}
+
+	if comments[0].Author.Login != "alice" {
+		t.Errorf("expected author alice, got %q", comments[0].Author.Login)
+	}
+	if comments[0].Body != "Looks good, just a few nits." {
+		t.Errorf("unexpected body: %q", comments[0].Body)
+	}
+
+	expectedTime, _ := time.Parse(time.RFC3339, "2026-02-12T10:30:00Z")
+	if !comments[0].CreatedAt.Equal(expectedTime) {
+		t.Errorf("expected createdAt %v, got %v", expectedTime, comments[0].CreatedAt)
+	}
+
+	if comments[1].Author.Login != "bob" {
+		t.Errorf("expected author bob, got %q", comments[1].Author.Login)
+	}
+	if comments[1].URL != "https://github.com/org/repo/pull/142#issuecomment-2" {
+		t.Errorf("unexpected URL: %q", comments[1].URL)
+	}
+}
+
 func TestRelativeTime(t *testing.T) {
 	now := time.Now()
 

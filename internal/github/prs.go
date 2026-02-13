@@ -76,6 +76,33 @@ func FetchPR(repoDir string, numberOrURL string) (*PR, error) {
 	return &pr, nil
 }
 
+// FetchComments fetches comments for a PR by number.
+func FetchComments(repoDir string, prNumber int) ([]Comment, error) {
+	cmd := exec.Command("gh", "pr", "view", strconv.Itoa(prNumber),
+		"--json", "comments",
+	)
+	if repoDir != "" {
+		cmd.Dir = repoDir
+	}
+
+	out, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return nil, fmt.Errorf("gh pr view comments failed: %s", string(exitErr.Stderr))
+		}
+		return nil, fmt.Errorf("gh pr view comments failed: %w", err)
+	}
+
+	var result struct {
+		Comments []Comment `json:"comments"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		return nil, fmt.Errorf("parsing comments output: %w", err)
+	}
+
+	return result.Comments, nil
+}
+
 // CheckGH verifies that the gh CLI is available and authenticated.
 func CheckGH() error {
 	if _, err := exec.LookPath("gh"); err != nil {

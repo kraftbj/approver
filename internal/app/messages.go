@@ -5,6 +5,18 @@ import (
 	gh "github.com/kraft/approver/internal/github"
 )
 
+// commentsLoadedMsg is sent when PR comments have been fetched.
+type commentsLoadedMsg struct {
+	prNumber int
+	comments []gh.Comment
+}
+
+// commentsErrorMsg is sent when fetching comments fails.
+type commentsErrorMsg struct {
+	prNumber int
+	err      error
+}
+
 // Messages used by the Bubble Tea update loop.
 
 // prsLoadedMsg is sent when PRs have been fetched from GitHub.

@@ -5,6 +5,14 @@ import (
 	"time"
 )
 
+// Comment represents a PR comment from GitHub.
+type Comment struct {
+	Author    Author    `json:"author"`
+	Body      string    `json:"body"`
+	CreatedAt time.Time `json:"createdAt"`
+	URL       string    `json:"url"`
+}
+
 // PR represents a GitHub pull request, matching the gh --json output format.
 type PR struct {
 	Number         int            `json:"number"`

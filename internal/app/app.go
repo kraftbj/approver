@@ -31,8 +31,9 @@ const (
 type detailMode int
 
 const (
-	detailInfo   detailMode = iota // PR metadata
-	detailReview                   // Review results
+	detailInfo     detailMode = iota // PR metadata
+	detailReview                     // Review results
+	detailComments                   // PR comments
 )
 
 // confirmAction tracks what the confirmation dialog is for.
@@ -91,6 +92,9 @@ type home struct {
 	reviewing  map[int]context.CancelFunc
 	reviewStep map[int]string
 
+	// PR comments cache (pr number -> comments)
+	comments map[int][]gh.Comment
+
 	// tmux session state
 	tmuxSessions map[int]*claude.TmuxSession
 
@@ -125,6 +129,7 @@ func newHome() home {
 		reviews:      make(map[int]claude.ReviewResult),
 		reviewing:    make(map[int]context.CancelFunc),
 		reviewStep:   make(map[int]string),
+		comments:          make(map[int][]gh.Comment),
 		tmuxSessions:      make(map[int]*claude.TmuxSession),
 		creatingWorktrees: make(map[int]bool),
 	}
@@ -266,6 +271,13 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.showError(fmt.Sprintf("Failed to approve PR #%d: %v", msg.prNumber, msg.err))
 		cmds = append(cmds, clearErrorAfter(5*time.Second))
 
+	case commentsLoadedMsg:
+		h.comments[msg.prNumber] = msg.comments
+
+	case commentsErrorMsg:
+		h.showError(fmt.Sprintf("Failed to fetch comments: %v", msg.err))
+		cmds = append(cmds, clearErrorAfter(3*time.Second))
+
 	case setupDoneMsg:
 		if h.pending != pendingNone && h.pendingPR == msg.prNumber {
 			cmd := h.dispatchPending(msg.prNumber, msg.wtPath)
@@ -385,9 +397,19 @@ func (h *home) handleDefaultKey(key string) tea.Cmd {
 		}
 
 	case "tab":
-		if h.detailMode == detailInfo {
+		switch h.detailMode {
+		case detailInfo:
 			h.detailMode = detailReview
-		} else {
+		case detailReview:
+			h.detailMode = detailComments
+			// Fetch comments if not cached
+			pr := h.prList.SelectedPR()
+			if pr != nil {
+				if _, ok := h.comments[pr.Number]; !ok {
+					return fetchCommentsCmd(h.repoDir, pr.Number)
+				}
+			}
+		default:
 			h.detailMode = detailInfo
 		}
 
@@ -604,6 +626,13 @@ func (h *home) viewDashboard(height int) string {
 		} else {
 			detailView = h.detail.ViewReview(nil, nil, false)
 		}
+	} else if h.detailMode == detailComments {
+		if pr != nil {
+			comments := h.comments[pr.Number]
+			detailView = h.detail.ViewComments(pr, comments)
+		} else {
+			detailView = h.detail.ViewComments(nil, nil)
+		}
 	} else {
 		detailView = h.detail.View(pr)
 	}
@@ -627,7 +656,7 @@ func (h *home) viewHelp(height int) string {
 
   Navigation:
     j/k, up/down   Navigate PR list
-    Tab            Toggle detail/review view
+    Tab            Cycle view: info/review/comments
     a              Add PR by number or URL
     d              Remove manually-tracked PR
 
@@ -817,6 +846,16 @@ func scanWorktreesCmd(mgr *worktree.Manager) tea.Cmd {
 // worktreesScanMsg carries the initial worktree scan results.
 type worktreesScanMsg struct {
 	worktrees map[int]string
+}
+
+func fetchCommentsCmd(repoDir string, prNumber int) tea.Cmd {
+	return func() tea.Msg {
+		comments, err := gh.FetchComments(repoDir, prNumber)
+		if err != nil {
+			return commentsErrorMsg{prNumber: prNumber, err: err}
+		}
+		return commentsLoadedMsg{prNumber: prNumber, comments: comments}
+	}
 }
 
 func removeTrackedPRCmd(prNumber int) tea.Cmd {

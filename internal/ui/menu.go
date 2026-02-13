@@ -34,7 +34,7 @@ func DefaultHints() []KeyHint {
 		{"w", "worktree"},
 		{"c", "review"},
 		{"t", "claude session"},
-		{"Tab", "toggle view"},
+		{"Tab", "cycle view"},
 		{"R", "refresh"},
 		{"A", "approve"},
 		{"o", "open"},

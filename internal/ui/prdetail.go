@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	gh "github.com/kraft/approver/internal/github"
 )
@@ -241,6 +242,62 @@ func (d *PRDetail) ViewReviewing(pr *gh.PR, spinnerView, stepName string) string
 
 	content := strings.Join(sections, "\n")
 	return DetailPanelStyle.Width(d.Width).Height(d.Height).Render(content)
+}
+
+// ViewComments renders the PR comments panel.
+func (d *PRDetail) ViewComments(pr *gh.PR, comments []gh.Comment) string {
+	if pr == nil {
+		content := DimStyle.Render("No PR selected")
+		return DetailPanelStyle.Width(d.Width).Height(d.Height).Render(content)
+	}
+
+	var sections []string
+
+	sections = append(sections, TitleStyle.Render(fmt.Sprintf("#%d Comments", pr.Number)))
+	sections = append(sections, "")
+
+	if len(comments) == 0 {
+		sections = append(sections, DimStyle.Render("  No comments on this PR."))
+		content := strings.Join(sections, "\n")
+		return DetailPanelStyle.Width(d.Width).Height(d.Height).Render(content)
+	}
+
+	sections = append(sections, DimStyle.Render(fmt.Sprintf("  %d comments", len(comments))))
+	sections = append(sections, "")
+
+	maxWidth := d.Width - 4
+	for _, c := range comments {
+		// Author + relative time
+		header := fmt.Sprintf("  @%s  %s", c.Author.Login, commentRelativeTime(c.CreatedAt))
+		sections = append(sections, SectionHeaderStyle.Render(header))
+
+		// Body (truncate long lines)
+		for _, line := range strings.Split(c.Body, "\n") {
+			if len(line) > maxWidth && maxWidth > 0 {
+				line = line[:maxWidth]
+			}
+			sections = append(sections, "  "+line)
+		}
+		sections = append(sections, "")
+	}
+
+	content := strings.Join(sections, "\n")
+	return DetailPanelStyle.Width(d.Width).Height(d.Height).Render(content)
+}
+
+// commentRelativeTime returns a human-readable relative time.
+func commentRelativeTime(t time.Time) string {
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
 }
 
 func checkIcon(status string) string {
