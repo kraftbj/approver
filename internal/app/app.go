@@ -334,6 +334,13 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case prApprovedMsg:
 		h.showInfo(fmt.Sprintf("PR #%d approved", msg.prNumber))
 		cmds = append(cmds, clearErrorAfter(3*time.Second))
+		// Optimistic update — show APPROVED immediately
+		for i, pr := range h.pr.prList.PRs {
+			if pr.Number == msg.prNumber {
+				h.pr.prList.PRs[i].ReviewDecision = "APPROVED"
+				break
+			}
+		}
 		cmds = append(cmds, fetchSinglePRCmd(h.repoDir, fmt.Sprintf("%d", msg.prNumber)))
 
 	case prApproveErrorMsg:

@@ -56,6 +56,7 @@
 
 - **Review Fix Agent** - Pass review findings to a new Claude agent that fixes the issues in the worktree, then seeks reviewer approval before committing and pushing
 - ~~**Review Word Wrap**~~ - Done. Review output, comments, and issue descriptions now word-wrap to fit the detail panel width
+- ~~**Optimistic Approval State**~~ - Done. After approving a PR, the review decision badge flips to APPROVED immediately; the background re-fetch confirms the state
 - **Inline Comment Drafting** - File/line browser UX for posting inline review comments
 - **Multi-Repo** - Config model for multiple repo dirs, cross-repo watchlist
 - **Watchlist: Issues** - Track issues alongside PRs in the watchlist
