@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -26,11 +27,30 @@ func (m *Menu) SetWidth(w int) {
 	m.Width = w
 }
 
+// screenNames maps screen index to display name.
+var screenNames = []string{"Reviews", "Issues", "Watchlist"}
+
+// ScreenIndicator renders the screen switcher like "[1:Reviews] 2:Issues 3:Watchlist".
+func ScreenIndicator(activeIdx int) string {
+	activeStyle := lipgloss.NewStyle().Foreground(ColorWhite).Bold(true)
+	inactiveStyle := lipgloss.NewStyle().Foreground(ColorDimGray)
+
+	var parts []string
+	for i, name := range screenNames {
+		label := fmt.Sprintf("%d:%s", i+1, name)
+		if i == activeIdx {
+			parts = append(parts, activeStyle.Render("["+label+"]"))
+		} else {
+			parts = append(parts, inactiveStyle.Render(label))
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 // DefaultHints returns the standard keybindings for the default state.
 func DefaultHints() []KeyHint {
 	return []KeyHint{
 		{"j/k", "navigate"},
-		{"a", "add PR"},
 		{"w", "worktree"},
 		{"c", "review"},
 		{"t", "claude session"},
@@ -61,8 +81,13 @@ func InputHints() []KeyHint {
 	}
 }
 
-// View renders the menu bar with the given hints.
+// View renders the menu bar with the given hints (no screen indicator).
 func (m *Menu) View(hints []KeyHint) string {
+	return m.ViewWithScreen(hints, "")
+}
+
+// ViewWithScreen renders the menu bar with an optional screen indicator prefix.
+func (m *Menu) ViewWithScreen(hints []KeyHint, screenIndicator string) string {
 	keyStyle := lipgloss.NewStyle().Foreground(ColorCyan).Bold(true)
 	sepStyle := lipgloss.NewStyle().Foreground(ColorDimGray)
 
@@ -71,6 +96,14 @@ func (m *Menu) View(hints []KeyHint) string {
 		parts = append(parts, keyStyle.Render(h.Key)+": "+h.Desc)
 	}
 
-	content := strings.Join(parts, sepStyle.Render("  "))
+	hintsContent := strings.Join(parts, sepStyle.Render("  "))
+
+	var content string
+	if screenIndicator != "" {
+		content = screenIndicator + sepStyle.Render("  |  ") + hintsContent
+	} else {
+		content = hintsContent
+	}
+
 	return MenuBarStyle.Width(m.Width).Render(content)
 }

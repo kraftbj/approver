@@ -76,13 +76,15 @@ type home struct {
 	height int
 	state  state
 
+	// Screen management
+	active activeScreen
+	pr     prScreen
+
 	// UI components
-	prList   ui.PRList
-	detail   ui.PRDetail
-	menu     ui.Menu
-	errBox   ui.ErrBox
-	spinner  spinner.Model
-	loading  bool
+	menu    ui.Menu
+	errBox  ui.ErrBox
+	spinner spinner.Model
+	loading bool
 
 	// Confirmation state
 	confirmMsg    string
@@ -101,9 +103,6 @@ type home struct {
 
 	// Worktree manager
 	wtManager *worktree.Manager
-
-	// Detail panel mode
-	detailMode detailMode
 
 	// Claude review state
 	reviews    map[int]claude.ReviewResult
@@ -139,17 +138,17 @@ func newHome() home {
 	s.Style = lipgloss.NewStyle().Foreground(ui.ColorCyan)
 
 	return home{
-		state:        stateLoading,
-		prList:       ui.NewPRList(),
-		detail:       ui.NewPRDetail(),
-		menu:         ui.NewMenu(),
-		errBox:       ui.NewErrBox(),
-		spinner:      s,
-		loading:      true,
-		worktrees:    make(map[int]string),
-		reviews:      make(map[int]claude.ReviewResult),
-		reviewing:    make(map[int]context.CancelFunc),
-		reviewStep:   make(map[int]string),
+		state:             stateLoading,
+		active:            screenReviews,
+		pr:                newPRScreen(),
+		menu:              ui.NewMenu(),
+		errBox:            ui.NewErrBox(),
+		spinner:           s,
+		loading:           true,
+		worktrees:         make(map[int]string),
+		reviews:           make(map[int]claude.ReviewResult),
+		reviewing:         make(map[int]context.CancelFunc),
+		reviewStep:        make(map[int]string),
 		comments:          make(map[int][]gh.Comment),
 		prSnapshots:       make(map[int]prSnapshot),
 		tmuxSessions:      make(map[int]*claude.TmuxSession),
@@ -187,7 +186,7 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case prsLoadedMsg:
 		h.loading = false
 		h.state = stateDefault
-		h.prList.SetPRs(msg.prs)
+		h.pr.prList.SetPRs(msg.prs)
 		h.reconcileWorktrees()
 		h.takeSnapshots()
 		// Also fetch tracked PRs to merge in
@@ -198,7 +197,6 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case trackedPRsLoadedMsg:
-		// Merge tracked PRs into the list (dedup by number)
 		for _, pr := range msg.prs {
 			h.addPRToList(pr)
 		}
@@ -217,12 +215,10 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.worktrees[msg.prNumber] = msg.path
 		delete(h.creatingWorktrees, msg.prNumber)
 		h.reconcileWorktrees()
-		// Check if per-repo setup is configured
 		if setupCmd := h.repoSetupCommand(); setupCmd != "" && h.pending != pendingNone && h.pendingPR == msg.prNumber {
 			cmds = append(cmds, runSetupCmd(msg.path, setupCmd, msg.prNumber))
 			return h, tea.Batch(cmds...)
 		}
-		// Dispatch any pending action
 		if h.pending != pendingNone && h.pendingPR == msg.prNumber {
 			cmd := h.dispatchPending(msg.prNumber, msg.path)
 			if cmd != nil {
@@ -251,7 +247,6 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.addPRToList(msg.pr)
 		h.state = stateDefault
 		h.inputBuffer = ""
-		// Persist the tracked PR
 		addTrackedPR(msg.pr.Number)
 
 	case prAddErrorMsg:
@@ -271,7 +266,6 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		delete(h.reviewing, msg.prNumber)
 		delete(h.reviewStep, msg.prNumber)
 		h.reconcileClaudeState()
-		// Persist to disk
 		saveReviewResult(msg.prNumber, msg.review)
 
 	case claudeReviewErrorMsg:
@@ -310,8 +304,7 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case branchUpdatedMsg:
 		h.showError(fmt.Sprintf("Branch updated for PR #%d", msg.prNumber))
 		cmds = append(cmds, clearErrorAfter(3*time.Second))
-		// Offer to push
-		pr := h.prList.SelectedPR()
+		pr := h.pr.prList.SelectedPR()
 		if pr != nil && pr.Number == msg.prNumber {
 			h.state = stateConfirm
 			h.confirmAction = confirmPushBranch
@@ -331,7 +324,6 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, clearErrorAfter(5*time.Second))
 
 	case pollTickMsg:
-		// Don't poll while loading to avoid stacking requests
 		if !h.loading {
 			cmds = append(cmds, pollPRsCmd(h.repoDir))
 		} else if h.cfg != nil && h.cfg.PollInterval > 0 {
@@ -339,7 +331,6 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case pollPRsLoadedMsg:
-		// Silently merge updated PRs without resetting loading state
 		for _, pr := range msg.prs {
 			h.addPRToList(pr)
 		}
@@ -347,7 +338,6 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.reconcileClaudeState()
 		h.reconcileNotifications()
 		h.takeSnapshots()
-		// Schedule next poll
 		if h.cfg != nil && h.cfg.PollInterval > 0 {
 			cmds = append(cmds, pollTick(h.cfg.PollInterval))
 		}
@@ -394,14 +384,12 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (h *home) handleKey(msg tea.KeyMsg) tea.Cmd {
 	key := msg.String()
 
-	// Global keys
 	if key == "ctrl+c" {
 		return tea.Quit
 	}
 
 	switch h.state {
 	case stateHelp:
-		// Any key dismisses help
 		h.state = stateDefault
 		return nil
 
@@ -423,178 +411,39 @@ func (h *home) handleKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (h *home) handleDefaultKey(key string) tea.Cmd {
+	// Screen switching (global, before dispatch)
+	switch key {
+	case "1":
+		h.active = screenReviews
+		return nil
+	case "2":
+		h.active = screenIssues
+		return nil
+	case "3":
+		h.active = screenWatchlist
+		return nil
+	}
+
+	// Dispatch to active screen
+	switch h.active {
+	case screenReviews:
+		return h.pr.HandleKey(h, key)
+	case screenIssues:
+		return h.handlePlaceholderKey(key)
+	case screenWatchlist:
+		return h.handlePlaceholderKey(key)
+	}
+	return nil
+}
+
+// handlePlaceholderKey handles keys for screens not yet implemented.
+func (h *home) handlePlaceholderKey(key string) tea.Cmd {
 	switch key {
 	case "q":
 		return tea.Quit
-
-	case "j", "down":
-		h.prList.MoveDown()
-		h.clearNotification()
-
-	case "k", "up":
-		h.prList.MoveUp()
-		h.clearNotification()
-
-	case "R":
-		h.loading = true
-		h.state = stateLoading
-		return tea.Batch(h.spinner.Tick, fetchPRsCmd(h.repoDir))
-
-	case "o":
-		pr := h.prList.SelectedPR()
-		if pr != nil && pr.URL != "" {
-			return openInBrowserCmd(pr.URL)
-		}
-
-	case "w":
-		pr := h.prList.SelectedPR()
-		if pr != nil {
-			if _, exists := h.worktrees[pr.Number]; exists {
-				h.showError(fmt.Sprintf("Worktree already exists for PR #%d", pr.Number))
-				return clearErrorAfter(3 * time.Second)
-			}
-			if h.creatingWorktrees[pr.Number] {
-				return nil
-			}
-			h.creatingWorktrees[pr.Number] = true
-			h.reconcileWorktrees()
-			return tea.Batch(h.spinner.Tick, createWorktreeCmd(h.wtManager, pr.Number, pr.HeadRefName))
-		}
-
-	case "W":
-		pr := h.prList.SelectedPR()
-		if pr != nil {
-			if _, exists := h.worktrees[pr.Number]; !exists {
-				h.showError(fmt.Sprintf("No worktree for PR #%d", pr.Number))
-				return clearErrorAfter(3 * time.Second)
-			}
-			h.state = stateConfirm
-			h.confirmAction = confirmDeleteWorktree
-			h.confirmMsg = fmt.Sprintf("Delete worktree for PR #%d? (y/n)", pr.Number)
-		}
-
-	case "a":
-		h.state = stateInput
-		h.inputAction = inputAddPR
-		h.inputPrompt = "Add PR (number or URL): "
-		h.inputBuffer = ""
-
-	case "d":
-		pr := h.prList.SelectedPR()
-		if pr != nil && pr.Source == "manual" {
-			h.removePR(pr.Number)
-			return removeTrackedPRCmd(pr.Number)
-		} else if pr != nil {
-			h.showError("Can only remove manually-tracked PRs")
-			return clearErrorAfter(3 * time.Second)
-		}
-
-	case "tab":
-		switch h.detailMode {
-		case detailInfo:
-			h.detailMode = detailReview
-		case detailReview:
-			h.detailMode = detailComments
-			// Fetch comments if not cached
-			pr := h.prList.SelectedPR()
-			if pr != nil {
-				if _, ok := h.comments[pr.Number]; !ok {
-					return fetchCommentsCmd(h.repoDir, pr.Number)
-				}
-			}
-		default:
-			h.detailMode = detailInfo
-		}
-
-	case "c":
-		pr := h.prList.SelectedPR()
-		if pr == nil {
-			return nil
-		}
-		if !claude.CheckClaude() {
-			h.showError("claude CLI not found on PATH")
-			return clearErrorAfter(3 * time.Second)
-		}
-		// If already reviewing, cancel
-		if cancel, running := h.reviewing[pr.Number]; running {
-			cancel()
-			delete(h.reviewing, pr.Number)
-			delete(h.reviewStep, pr.Number)
-			h.reconcileClaudeState()
-			return nil
-		}
-		wtPath, exists := h.worktrees[pr.Number]
-		if !exists {
-			if h.creatingWorktrees[pr.Number] {
-				return nil
-			}
-			h.pending = pendingReview
-			h.pendingPR = pr.Number
-			h.creatingWorktrees[pr.Number] = true
-			h.reconcileWorktrees()
-			return tea.Batch(h.spinner.Tick, createWorktreeCmd(h.wtManager, pr.Number, pr.HeadRefName))
-		}
-		return h.startReview(pr.Number, wtPath)
-
-	case "t":
-		pr := h.prList.SelectedPR()
-		if pr == nil {
-			return nil
-		}
-		if !claude.CheckTmux() {
-			h.showError("tmux not found on PATH")
-			return clearErrorAfter(3 * time.Second)
-		}
-		if !claude.CheckClaude() {
-			h.showError("claude CLI not found on PATH")
-			return clearErrorAfter(3 * time.Second)
-		}
-		wtPath, exists := h.worktrees[pr.Number]
-		if !exists {
-			if h.creatingWorktrees[pr.Number] {
-				return nil
-			}
-			h.pending = pendingTmux
-			h.pendingPR = pr.Number
-			h.creatingWorktrees[pr.Number] = true
-			h.reconcileWorktrees()
-			return tea.Batch(h.spinner.Tick, createWorktreeCmd(h.wtManager, pr.Number, pr.HeadRefName))
-		}
-		return h.startTmux(pr.Number, wtPath)
-
-	case "u":
-		pr := h.prList.SelectedPR()
-		if pr != nil {
-			if _, exists := h.worktrees[pr.Number]; !exists {
-				h.showError(fmt.Sprintf("No worktree for PR #%d — create one first with w", pr.Number))
-				return clearErrorAfter(3 * time.Second)
-			}
-			h.state = stateConfirm
-			h.confirmAction = confirmUpdateBranch
-			h.confirmMsg = fmt.Sprintf("Merge origin/%s into worktree for PR #%d? (y/n)", pr.BaseRefName, pr.Number)
-		}
-
-	case "X":
-		pr := h.prList.SelectedPR()
-		if pr != nil {
-			h.state = stateInput
-			h.inputAction = inputRequestChanges
-			h.inputPrompt = fmt.Sprintf("Request changes on #%d — Reason: ", pr.Number)
-			h.inputBuffer = ""
-		}
-
-	case "A":
-		pr := h.prList.SelectedPR()
-		if pr != nil {
-			h.state = stateConfirm
-			h.confirmAction = confirmApprove
-			h.confirmMsg = fmt.Sprintf("Approve PR #%d? (y/n)", pr.Number)
-		}
-
 	case "?":
 		h.state = stateHelp
 	}
-
 	return nil
 }
 
@@ -606,23 +455,23 @@ func (h *home) handleConfirmKey(key string) tea.Cmd {
 		h.confirmAction = confirmNone
 		switch action {
 		case confirmDeleteWorktree:
-			pr := h.prList.SelectedPR()
+			pr := h.pr.prList.SelectedPR()
 			if pr != nil {
 				return deleteWorktreeCmd(h.wtManager, pr.Number)
 			}
 		case confirmApprove:
-			pr := h.prList.SelectedPR()
+			pr := h.pr.prList.SelectedPR()
 			if pr != nil {
 				return approvePRCmd(h.repoDir, pr.Number)
 			}
 		case confirmUpdateBranch:
-			pr := h.prList.SelectedPR()
+			pr := h.pr.prList.SelectedPR()
 			if pr != nil {
 				wtPath := h.worktrees[pr.Number]
 				return updateBranchCmd(wtPath, pr.BaseRefName, pr.Number)
 			}
 		case confirmPushBranch:
-			pr := h.prList.SelectedPR()
+			pr := h.pr.prList.SelectedPR()
 			if pr != nil {
 				wtPath := h.worktrees[pr.Number]
 				return pushBranchCmd(wtPath, pr.HeadRefName, pr.Number)
@@ -648,7 +497,7 @@ func (h *home) handleInputKey(msg tea.KeyMsg) tea.Cmd {
 			h.inputBuffer = ""
 			switch h.inputAction {
 			case inputRequestChanges:
-				pr := h.prList.SelectedPR()
+				pr := h.pr.prList.SelectedPR()
 				h.state = stateDefault
 				if pr != nil {
 					return requestChangesPRCmd(h.repoDir, pr.Number, input)
@@ -666,7 +515,6 @@ func (h *home) handleInputKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		return nil
 	default:
-		// Accept printable characters and pasted text
 		if len(msg.Runes) > 0 {
 			h.inputBuffer += string(msg.Runes)
 		}
@@ -687,14 +535,15 @@ func (h home) View() string {
 	}
 	panelHeight := h.height - menuHeight - errHeight
 
-	// Main content area
+	// Main content area — dispatch to active screen
 	var mainContent string
-	if h.loading && len(h.prList.PRs) == 0 {
-		mainContent = h.viewLoading(panelHeight)
-	} else if len(h.prList.PRs) == 0 {
-		mainContent = h.viewEmpty(panelHeight)
-	} else {
-		mainContent = h.viewDashboard(panelHeight)
+	switch h.active {
+	case screenReviews:
+		mainContent = h.pr.View(&h, panelHeight)
+	case screenIssues:
+		mainContent = h.viewPlaceholder("Issues", "Assigned issues will appear here.", panelHeight)
+	case screenWatchlist:
+		mainContent = h.viewPlaceholder("Watchlist", "Tracked PRs will appear here.", panelHeight)
 	}
 
 	// Overlay handling
@@ -706,7 +555,8 @@ func (h home) View() string {
 		mainContent = h.viewInputOverlay(mainContent, panelHeight)
 	}
 
-	// Menu bar
+	// Menu bar with screen indicator
+	screenIndicator := ui.ScreenIndicator(int(h.active))
 	var hints []ui.KeyHint
 	switch h.state {
 	case stateConfirm:
@@ -716,7 +566,7 @@ func (h home) View() string {
 	default:
 		hints = ui.DefaultHints()
 	}
-	menuView := h.menu.View(hints)
+	menuView := h.menu.ViewWithScreen(hints, screenIndicator)
 
 	// Error bar
 	errView := h.errBox.View()
@@ -730,71 +580,33 @@ func (h home) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
-func (h *home) viewDashboard(height int) string {
-	listWidth := h.width * 30 / 100
-	detailWidth := h.width - listWidth
-
-	h.prList.SetSize(listWidth, height)
-	h.detail.SetSize(detailWidth, height)
-
-	listView := h.prList.View()
-
-	var detailView string
-	pr := h.prList.SelectedPR()
-
-	if h.detailMode == detailReview {
-		if pr != nil {
-			_, hasWT := h.worktrees[pr.Number]
-			if _, reviewing := h.reviewing[pr.Number]; reviewing {
-				step := h.reviewStep[pr.Number]
-				detailView = h.detail.ViewReviewing(pr, h.spinner.View(), step)
-			} else if review, ok := h.reviews[pr.Number]; ok {
-				data := &ui.ReviewDisplayData{
-					Checklist:  review.Agent3Out,
-					RawOutput:  review.RawOutput,
-					IssueCount: review.IssueCount(),
-					HighCount:  review.HighSeverityCount(),
-				}
-				detailView = h.detail.ViewReview(pr, data, hasWT)
-			} else {
-				detailView = h.detail.ViewReview(pr, nil, hasWT)
-			}
-		} else {
-			detailView = h.detail.ViewReview(nil, nil, false)
-		}
-	} else if h.detailMode == detailComments {
-		if pr != nil {
-			comments := h.comments[pr.Number]
-			detailView = h.detail.ViewComments(pr, comments)
-		} else {
-			detailView = h.detail.ViewComments(nil, nil)
-		}
-	} else {
-		detailView = h.detail.View(pr)
-	}
-
-	return lipgloss.JoinHorizontal(lipgloss.Top, listView, detailView)
-}
-
 func (h *home) viewLoading(height int) string {
 	content := fmt.Sprintf("\n\n  %s Fetching PRs...", h.spinner.View())
 	return lipgloss.NewStyle().Width(h.width).Height(height).Render(content)
 }
 
 func (h *home) viewEmpty(height int) string {
-	content := ui.DimStyle.Render("\n\n  No PRs requesting your review.\n\n  Press R to refresh, a to add a PR manually.")
+	content := ui.DimStyle.Render("\n\n  No PRs requesting your review.\n\n  Press R to refresh.")
+	return lipgloss.NewStyle().Width(h.width).Height(height).Render(content)
+}
+
+func (h *home) viewPlaceholder(title, subtitle string, height int) string {
+	content := ui.DimStyle.Render(fmt.Sprintf("\n\n  %s\n\n  %s\n\n  Press 1/2/3 to switch screens.", title, subtitle))
 	return lipgloss.NewStyle().Width(h.width).Height(height).Render(content)
 }
 
 func (h *home) viewHelp(height int) string {
 	helpText := `
-  Approver - PR Review Manager
+  Approver - GitHub AI Workflow Hub
+
+  Screens:
+    1              Reviews (PRs requesting your review)
+    2              Issues (assigned issues)
+    3              Watchlist (tracked PRs)
 
   Navigation:
-    j/k, up/down   Navigate PR list
+    j/k, up/down   Navigate list
     Tab            Cycle view: info/review/comments
-    a              Add PR by number or URL
-    d              Remove manually-tracked PR
 
   Actions:
     w              Create worktree for selected PR
@@ -805,8 +617,8 @@ func (h *home) viewHelp(height int) string {
     A              Approve PR (with confirmation)
     X              Request changes (with reason)
     u              Update branch (merge base into worktree)
-    o              Open PR in browser
-    R              Refresh PR list
+    o              Open in browser
+    R              Refresh
 
   General:
     ?              Show this help
@@ -835,7 +647,6 @@ func (h *home) viewConfirmOverlay(base string, height int) string {
 		Padding(1, 2).
 		Render(h.confirmMsg)
 
-	// Center the overlay on top of the base
 	return placeOverlay(h.width, height, base, overlay)
 }
 
@@ -850,7 +661,6 @@ func (h *home) viewInputOverlay(base string, height int) string {
 	return placeOverlay(h.width, height, base, overlay)
 }
 
-// placeOverlay renders an overlay centered on a base view.
 func placeOverlay(width, height int, base, overlay string) string {
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, overlay,
 		lipgloss.WithWhitespaceChars(" "),
@@ -864,8 +674,8 @@ func (h *home) layoutPanels() {
 	listWidth := h.width * 30 / 100
 	detailWidth := h.width - listWidth
 
-	h.prList.SetSize(listWidth, panelHeight)
-	h.detail.SetSize(detailWidth, panelHeight)
+	h.pr.prList.SetSize(listWidth, panelHeight)
+	h.pr.detail.SetSize(detailWidth, panelHeight)
 	h.menu.SetWidth(h.width)
 	h.errBox.SetWidth(h.width)
 }
@@ -875,37 +685,28 @@ func (h *home) showError(msg string) {
 }
 
 func (h *home) reconcileWorktrees() {
-	for i := range h.prList.PRs {
-		num := h.prList.PRs[i].Number
+	for i := range h.pr.prList.PRs {
+		num := h.pr.prList.PRs[i].Number
 		_, exists := h.worktrees[num]
-		h.prList.PRs[i].HasWorktree = exists
-		h.prList.PRs[i].IsCreatingWorktree = h.creatingWorktrees[num]
+		h.pr.prList.PRs[i].HasWorktree = exists
+		h.pr.prList.PRs[i].IsCreatingWorktree = h.creatingWorktrees[num]
 	}
 }
 
 func (h *home) reconcileClaudeState() {
-	for i := range h.prList.PRs {
-		num := h.prList.PRs[i].Number
+	for i := range h.pr.prList.PRs {
+		num := h.pr.prList.PRs[i].Number
 		_, hasReview := h.reviews[num]
 		_, isReviewing := h.reviewing[num]
 		session, hasTmux := h.tmuxSessions[num]
-		h.prList.PRs[i].HasReview = hasReview
-		h.prList.PRs[i].IsReviewing = isReviewing
-		h.prList.PRs[i].HasTmux = hasTmux && session.Exists()
+		h.pr.prList.PRs[i].HasReview = hasReview
+		h.pr.prList.PRs[i].IsReviewing = isReviewing
+		h.pr.prList.PRs[i].HasTmux = hasTmux && session.Exists()
 	}
 }
 
-// clearNotification removes the notification flag from the currently selected PR.
-func (h *home) clearNotification() {
-	pr := h.prList.SelectedPR()
-	if pr != nil {
-		pr.HasNotification = false
-	}
-}
-
-// takeSnapshots records the current state of all PRs for future change detection.
 func (h *home) takeSnapshots() {
-	for _, pr := range h.prList.PRs {
+	for _, pr := range h.pr.prList.PRs {
 		h.prSnapshots[pr.Number] = prSnapshot{
 			commentCount:   pr.CommentCount,
 			ciStatus:       pr.CIStatus(),
@@ -914,13 +715,12 @@ func (h *home) takeSnapshots() {
 	}
 }
 
-// reconcileNotifications compares current PR state to snapshots and sets notifications.
 func (h *home) reconcileNotifications() {
-	for i := range h.prList.PRs {
-		pr := &h.prList.PRs[i]
+	for i := range h.pr.prList.PRs {
+		pr := &h.pr.prList.PRs[i]
 		snap, exists := h.prSnapshots[pr.Number]
 		if !exists {
-			continue // No snapshot = first load, no notification
+			continue
 		}
 		if pr.CommentCount != snap.commentCount ||
 			pr.CIStatus() != snap.ciStatus ||
@@ -931,22 +731,21 @@ func (h *home) reconcileNotifications() {
 }
 
 func (h *home) addPRToList(pr gh.PR) {
-	// Check if already in list (dedup by number)
-	for i, existing := range h.prList.PRs {
+	for i, existing := range h.pr.prList.PRs {
 		if existing.Number == pr.Number {
-			h.prList.PRs[i] = pr
+			h.pr.prList.PRs[i] = pr
 			return
 		}
 	}
-	h.prList.PRs = append(h.prList.PRs, pr)
+	h.pr.prList.PRs = append(h.pr.prList.PRs, pr)
 }
 
 func (h *home) removePR(number int) {
-	for i, pr := range h.prList.PRs {
+	for i, pr := range h.pr.prList.PRs {
 		if pr.Number == number {
-			h.prList.PRs = append(h.prList.PRs[:i], h.prList.PRs[i+1:]...)
-			if h.prList.Selected >= len(h.prList.PRs) {
-				h.prList.Selected = max(0, len(h.prList.PRs)-1)
+			h.pr.prList.PRs = append(h.pr.prList.PRs[:i], h.pr.prList.PRs[i+1:]...)
+			if h.pr.prList.Selected >= len(h.pr.prList.PRs) {
+				h.pr.prList.Selected = max(0, len(h.pr.prList.PRs)-1)
 			}
 			return
 		}
@@ -983,8 +782,6 @@ func clearErrorAfter(d time.Duration) tea.Cmd {
 
 func openInBrowserCmd(url string) tea.Cmd {
 	return func() tea.Msg {
-		// Use macOS "open" directly - gh pr view --web doesn't work
-		// inside alt screen since Bubble Tea owns stdout/stderr.
 		exec.Command("open", url).Run()
 		return nil
 	}
@@ -1016,7 +813,6 @@ func scanWorktreesCmd(mgr *worktree.Manager) tea.Cmd {
 	}
 }
 
-// worktreesScanMsg carries the initial worktree scan results.
 type worktreesScanMsg struct {
 	worktrees map[int]string
 }
@@ -1031,7 +827,6 @@ func pollPRsCmd(repoDir string) tea.Cmd {
 	return func() tea.Msg {
 		prs, err := gh.FetchPRs(repoDir)
 		if err != nil {
-			// Silently ignore poll errors
 			return nil
 		}
 		return pollPRsLoadedMsg{prs: prs}
@@ -1071,7 +866,6 @@ func runClaudeReviewCmd(ctx context.Context, cfg *config.Config, prNumber int, w
 	}
 }
 
-// Fun review spinner messages, rotated every 4 seconds during review.
 var funReviewMessages = []string{
 	"Reading the diff with fresh eyes...",
 	"Checking for off-by-one errors...",
@@ -1085,9 +879,8 @@ var funReviewMessages = []string{
 	"Almost there, double-checking...",
 }
 
-// startReview begins the Claude review pipeline for a PR.
 func (h *home) startReview(prNumber int, wtPath string) tea.Cmd {
-	h.detailMode = detailReview
+	h.pr.detailMode = detailReview
 	ctx, cancel := context.WithCancel(context.Background())
 	h.reviewing[prNumber] = cancel
 	h.reviewStep[prNumber] = funReviewMessages[0]
@@ -1100,7 +893,6 @@ func (h *home) startReview(prNumber int, wtPath string) tea.Cmd {
 	)
 }
 
-// startTmux creates/reuses a tmux session and hands off the terminal.
 func (h *home) startTmux(prNumber int, wtPath string) tea.Cmd {
 	session, ok := h.tmuxSessions[prNumber]
 	if !ok || !session.Exists() {
@@ -1120,7 +912,6 @@ func (h *home) startTmux(prNumber int, wtPath string) tea.Cmd {
 	})
 }
 
-// dispatchPending fires the deferred action after worktree/setup completes.
 func (h *home) dispatchPending(prNumber int, wtPath string) tea.Cmd {
 	action := h.pending
 	h.clearPending()
@@ -1133,13 +924,11 @@ func (h *home) dispatchPending(prNumber int, wtPath string) tea.Cmd {
 	return nil
 }
 
-// clearPending resets the pending action state.
 func (h *home) clearPending() {
 	h.pending = pendingNone
 	h.pendingPR = 0
 }
 
-// repoSetupCommand returns the per-repo setup command if configured.
 func (h *home) repoSetupCommand() string {
 	if h.cfg == nil {
 		return ""
@@ -1159,7 +948,6 @@ func reviewSpinnerTick() tea.Cmd {
 
 func updateBranchCmd(wtPath, baseBranch string, prNumber int) tea.Cmd {
 	return func() tea.Msg {
-		// Fetch the base branch and merge it
 		fetchCmd := exec.Command("git", "-C", wtPath, "fetch", "origin", baseBranch)
 		if out, err := fetchCmd.CombinedOutput(); err != nil {
 			return branchUpdateErrorMsg{prNumber: prNumber, err: fmt.Errorf("fetch: %s", string(out))}
@@ -1230,13 +1018,11 @@ func max(a, b int) int {
 }
 
 func Run() error {
-	// Check prerequisites
 	if err := gh.CheckGH(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Determine repo directory
 	repoDir, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("getting working directory: %w", err)
