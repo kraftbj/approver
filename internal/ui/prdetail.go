@@ -198,22 +198,17 @@ func (d *PRDetail) ViewReview(pr *gh.PR, review *ReviewDisplayData, hasWorktree 
 		sections = append(sections, SectionHeaderStyle.Render("  Confirmed Issues"))
 		sections = append(sections, "")
 
-		// Display checklist lines, wrapping each to panel width
 		maxWidth := d.Width - 4
-		for _, line := range strings.Split(review.Checklist, "\n") {
-			if len(line) > maxWidth && maxWidth > 0 {
-				line = line[:maxWidth]
-			}
+		wrapped := wrapText(review.Checklist, maxWidth)
+		for _, line := range strings.Split(wrapped, "\n") {
 			sections = append(sections, "  "+line)
 		}
 	} else if review.RawOutput != "" {
 		sections = append(sections, SectionHeaderStyle.Render("  Review Output"))
 		sections = append(sections, "")
 		maxWidth := d.Width - 4
-		for _, line := range strings.Split(review.RawOutput, "\n") {
-			if len(line) > maxWidth && maxWidth > 0 {
-				line = line[:maxWidth]
-			}
+		wrapped := wrapText(review.RawOutput, maxWidth)
+		for _, line := range strings.Split(wrapped, "\n") {
 			sections = append(sections, "  "+line)
 		}
 	}
@@ -268,11 +263,8 @@ func (d *PRDetail) ViewComments(pr *gh.PR, comments []gh.Comment) string {
 		header := fmt.Sprintf("  @%s  %s", c.Author.Login, gh.FormatRelativeTime(c.CreatedAt))
 		sections = append(sections, SectionHeaderStyle.Render(header))
 
-		// Body (truncate long lines)
-		for _, line := range strings.Split(c.Body, "\n") {
-			if len(line) > maxWidth && maxWidth > 0 {
-				line = line[:maxWidth]
-			}
+		wrapped := wrapText(c.Body, maxWidth)
+		for _, line := range strings.Split(wrapped, "\n") {
 			sections = append(sections, "  "+line)
 		}
 		sections = append(sections, "")

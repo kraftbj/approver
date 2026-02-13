@@ -95,10 +95,8 @@ func (d *IssueDetail) View(issue *gh.Issue) string {
 		sections = append(sections, SectionHeaderStyle.Render("  Description"))
 		sections = append(sections, "")
 		maxWidth := d.Width - 4
-		for _, line := range strings.Split(issue.Body, "\n") {
-			if len(line) > maxWidth && maxWidth > 0 {
-				line = line[:maxWidth]
-			}
+		wrapped := wrapText(issue.Body, maxWidth)
+		for _, line := range strings.Split(wrapped, "\n") {
 			sections = append(sections, "  "+line)
 		}
 	}
