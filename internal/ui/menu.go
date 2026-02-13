@@ -30,6 +30,7 @@ func (m *Menu) SetWidth(w int) {
 func DefaultHints() []KeyHint {
 	return []KeyHint{
 		{"j/k", "navigate"},
+		{"a", "add PR"},
 		{"w", "worktree"},
 		{"c", "review"},
 		{"t", "claude session"},

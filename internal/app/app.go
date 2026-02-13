@@ -430,9 +430,9 @@ func (h *home) handleInputKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		return nil
 	default:
-		// Only accept printable characters
-		if len(key) == 1 || key == "/" || key == ":" {
-			h.inputBuffer += key
+		// Accept printable characters and pasted text
+		if len(msg.Runes) > 0 {
+			h.inputBuffer += string(msg.Runes)
 		}
 		return nil
 	}

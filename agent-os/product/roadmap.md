@@ -13,6 +13,18 @@
 - **Review Output** - Display Claude's analysis in detail panel with Tab toggle between PR info and review results
 - **Interactive Claude Session** - `t` key opens tmux session with Claude in the PR worktree
 - **Configurable** - Review prompt, budget, and allowed tools via config.yaml
+- **Fun review spinner** - Cycle through playful status messages while review runs (since there's no streaming output)
+
+## Bugs
+
+- **Review panel hint misleading without worktree** - "Press c to start a review" shows even when no worktree exists, but `c` then errors asking to press `w` first. Should say "Press w to create a worktree, then c to review."
+
+## Enhancements
+
+- **Auto-create worktree on demand** - When pressing `c` or `t` without a worktree, automatically create one instead of requiring `w` first
+- **Worktree creation spinner** - Show a progress indicator while a worktree is being created (fetch + checkout can be slow)
+- **Approve from the app** - Submit PR approval (and possibly request-changes/comment) directly from the TUI without opening a browser
+- **Per-repo setup commands** - Config option to specify a command to run in each worktree after creation (e.g. `npm install`, `docker compose up`, `make dev`) to spin up local dev environments
 
 ## Phase 3: GitHub Feedback Loop
 
