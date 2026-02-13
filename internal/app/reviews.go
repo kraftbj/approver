@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -12,20 +13,30 @@ import (
 )
 
 // reviewsDir returns the directory for persisted review results.
-func reviewsDir() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "approver", "reviews")
+func reviewsDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("getting home directory: %w", err)
+	}
+	return filepath.Join(home, ".config", "approver", "reviews"), nil
 }
 
 // reviewFilePath returns the path for a specific PR's review result.
-func reviewFilePath(prNumber int) string {
-	return filepath.Join(reviewsDir(), "review-"+strconv.Itoa(prNumber)+".json")
+func reviewFilePath(prNumber int) (string, error) {
+	dir, err := reviewsDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "review-"+strconv.Itoa(prNumber)+".json"), nil
 }
 
 // saveReviewResult writes a review result to disk.
 func saveReviewResult(prNumber int, result claude.ReviewResult) error {
-	dir := reviewsDir()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	dir, err := reviewsDir()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 
@@ -33,14 +44,22 @@ func saveReviewResult(prNumber int, result claude.ReviewResult) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(reviewFilePath(prNumber), data, 0o644)
+
+	path, err := reviewFilePath(prNumber)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
 }
 
 // loadAllReviews reads all persisted review results from disk.
 func loadAllReviews() map[int]claude.ReviewResult {
 	reviews := make(map[int]claude.ReviewResult)
 
-	dir := reviewsDir()
+	dir, err := reviewsDir()
+	if err != nil {
+		return reviews
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return reviews
@@ -73,15 +92,6 @@ func loadAllReviews() map[int]claude.ReviewResult {
 	return reviews
 }
 
-// deleteReviewResult removes a persisted review result.
-func deleteReviewResult(prNumber int) error {
-	path := reviewFilePath(prNumber)
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return nil
-}
-
 // loadReviewsCmd is a tea.Cmd that loads all persisted reviews.
 func loadReviewsCmd() tea.Cmd {
 	return func() tea.Msg {
@@ -90,7 +100,3 @@ func loadReviewsCmd() tea.Cmd {
 	}
 }
 
-// reviewsLoadedMsg carries persisted review results loaded from disk.
-type reviewsLoadedMsg struct {
-	reviews map[int]claude.ReviewResult
-}

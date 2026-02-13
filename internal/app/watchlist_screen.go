@@ -82,6 +82,18 @@ func (s *watchlistScreen) HandleKey(h *home, key string) tea.Cmd {
 	return nil
 }
 
+func (s *watchlistScreen) Hints() []ui.KeyHint {
+	return []ui.KeyHint{
+		{Key: "j/k", Desc: "navigate"},
+		{Key: "a", Desc: "add"},
+		{Key: "d", Desc: "remove"},
+		{Key: "o", Desc: "open"},
+		{Key: "R", Desc: "refresh"},
+		{Key: "?", Desc: "help"},
+		{Key: "q", Desc: "quit"},
+	}
+}
+
 func (s *watchlistScreen) View(h *home, height int) string {
 	if !s.loaded && h.loading {
 		return h.viewLoading(height)
@@ -94,8 +106,7 @@ func (s *watchlistScreen) View(h *home, height int) string {
 }
 
 func (s *watchlistScreen) viewDashboard(h *home, height int) string {
-	listWidth := h.width * 30 / 100
-	detailWidth := h.width - listWidth
+	listWidth, detailWidth := screenLayout(h.width)
 
 	s.prList.SetSize(listWidth, height)
 	s.detail.SetSize(detailWidth, height)

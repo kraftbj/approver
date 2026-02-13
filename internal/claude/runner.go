@@ -3,11 +3,12 @@ package claude
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
 	"sync"
+
+	"github.com/kraft/approver/internal/github"
 )
 
 // DefaultPrompt is the default Agent 1 review prompt.
@@ -15,9 +16,6 @@ const DefaultPrompt = "Review the code changes in this repository. Analyze for: 
 
 // DefaultAllowedTools is the set of tools review agents can use.
 const DefaultAllowedTools = "Read,Glob,Grep"
-
-// DefaultBudget is the default max USD per review.
-const DefaultBudget = 1.00
 
 // agent2PromptTemplate is the prompt for Agent 2 (existing review validation).
 const agent2PromptTemplate = `Here are the existing review comments on this PR:
@@ -63,47 +61,19 @@ func RunAgent(ctx context.Context, worktreePath, prompt, allowedTools string) (s
 	return stdout.String(), nil
 }
 
-// ghComment represents a single comment from gh pr view --json output.
-type ghComment struct {
-	Author struct {
-		Login string `json:"login"`
-	} `json:"author"`
-	Body      string `json:"body"`
-	CreatedAt string `json:"createdAt"`
-}
-
-type ghCommentsResponse struct {
-	Comments []ghComment `json:"comments"`
-}
-
-// FetchPRComments fetches existing review comments for a PR.
+// FetchPRComments fetches existing review comments for a PR and formats them as a string.
 func FetchPRComments(repoDir string, prNumber int) (string, error) {
-	cmd := exec.Command("gh", "pr", "view", fmt.Sprintf("%d", prNumber),
-		"--json", "comments",
-	)
-	if repoDir != "" {
-		cmd.Dir = repoDir
-	}
-
-	out, err := cmd.Output()
+	comments, err := github.FetchComments(repoDir, prNumber)
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("gh pr view comments failed: %s", string(exitErr.Stderr))
-		}
-		return "", fmt.Errorf("gh pr view comments failed: %w", err)
+		return "", err
 	}
 
-	var resp ghCommentsResponse
-	if err := json.Unmarshal(out, &resp); err != nil {
-		return "", fmt.Errorf("parsing comments: %w", err)
-	}
-
-	if len(resp.Comments) == 0 {
+	if len(comments) == 0 {
 		return "(no existing review comments)", nil
 	}
 
 	var parts []string
-	for _, c := range resp.Comments {
+	for _, c := range comments {
 		parts = append(parts, fmt.Sprintf("@%s:\n%s", c.Author.Login, c.Body))
 	}
 	return strings.Join(parts, "\n\n---\n\n"), nil

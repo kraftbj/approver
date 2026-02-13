@@ -54,6 +54,8 @@
 
 ## Future
 
+- **Review Fix Agent** - Pass review findings to a new Claude agent that fixes the issues in the worktree, then seeks reviewer approval before committing and pushing
+- **Review Word Wrap** - Claude review output should wrap to fit the detail panel width instead of bleeding past the right edge of the terminal
 - **Inline Comment Drafting** - File/line browser UX for posting inline review comments
 - **Multi-Repo** - Config model for multiple repo dirs, cross-repo watchlist
 - **Watchlist: Issues** - Track issues alongside PRs in the watchlist

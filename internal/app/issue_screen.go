@@ -49,7 +49,7 @@ func (s *issueScreen) HandleKey(h *home, key string) tea.Cmd {
 	case "R":
 		h.loading = true
 		h.state = stateLoading
-		return tea.Batch(h.spinner.Tick, fetchIssuesCmd(h.repoDir))
+		return tea.Batch(h.spinner.Tick, fetchIssuesCmd(h.repoDir, h.cfg.PRLimit))
 
 	case "o":
 		issue := s.issueList.SelectedIssue()
@@ -150,6 +150,20 @@ func (s *issueScreen) HandleKey(h *home, key string) tea.Cmd {
 	return nil
 }
 
+func (s *issueScreen) Hints() []ui.KeyHint {
+	return []ui.KeyHint{
+		{Key: "j/k", Desc: "navigate"},
+		{Key: "w", Desc: "worktree"},
+		{Key: "c", Desc: "tmux"},
+		{Key: "p", Desc: "open PR"},
+		{Key: "a", Desc: "add"},
+		{Key: "o", Desc: "open"},
+		{Key: "R", Desc: "refresh"},
+		{Key: "?", Desc: "help"},
+		{Key: "q", Desc: "quit"},
+	}
+}
+
 func (s *issueScreen) View(h *home, height int) string {
 	if !s.loaded && h.loading {
 		return h.viewLoading(height)
@@ -162,8 +176,7 @@ func (s *issueScreen) View(h *home, height int) string {
 }
 
 func (s *issueScreen) viewDashboard(h *home, height int) string {
-	listWidth := h.width * 30 / 100
-	detailWidth := h.width - listWidth
+	listWidth, detailWidth := screenLayout(h.width)
 
 	s.issueList.SetSize(listWidth, height)
 	s.detail.SetSize(detailWidth, height)
@@ -208,9 +221,9 @@ const (
 
 // Issue commands
 
-func fetchIssuesCmd(repoDir string) tea.Cmd {
+func fetchIssuesCmd(repoDir string, limit int) tea.Cmd {
 	return func() tea.Msg {
-		issues, err := gh.FetchIssues(repoDir)
+		issues, err := gh.FetchIssues(repoDir, limit)
 		if err != nil {
 			return issuesErrorMsg{err: err}
 		}
@@ -249,7 +262,9 @@ func deleteIssueWorktreeCmd(mgr *worktree.Manager, issueNumber int) tea.Cmd {
 
 func removeTrackedIssueCmd(issueNumber int) tea.Cmd {
 	return func() tea.Msg {
-		removeTrackedIssue(issueNumber)
+		if err := removeTrackedIssue(issueNumber); err != nil {
+			return trackedRemoveErrorMsg{err: err}
+		}
 		return nil
 	}
 }

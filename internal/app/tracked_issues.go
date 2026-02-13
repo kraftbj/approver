@@ -10,18 +10,24 @@ import (
 	gh "github.com/kraft/approver/internal/github"
 )
 
-// TrackedIssue is a minimal record for a manually-tracked issue.
-type TrackedIssue struct {
+// trackedIssue is a minimal record for a manually-tracked issue.
+type trackedIssue struct {
 	Number int `json:"number"`
 }
 
-func trackedIssuesFilePath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "approver", "tracked-issues.json")
+func trackedIssuesFilePath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("getting home directory: %w", err)
+	}
+	return filepath.Join(home, ".config", "approver", "tracked-issues.json"), nil
 }
 
-func loadTrackedIssues() ([]TrackedIssue, error) {
-	path := trackedIssuesFilePath()
+func loadTrackedIssues() ([]trackedIssue, error) {
+	path, err := trackedIssuesFilePath()
+	if err != nil {
+		return nil, err
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -30,17 +36,20 @@ func loadTrackedIssues() ([]TrackedIssue, error) {
 		return nil, err
 	}
 
-	var tracked []TrackedIssue
+	var tracked []trackedIssue
 	if err := json.Unmarshal(data, &tracked); err != nil {
 		return nil, err
 	}
 	return tracked, nil
 }
 
-func saveTrackedIssues(tracked []TrackedIssue) error {
-	path := trackedIssuesFilePath()
+func saveTrackedIssues(tracked []trackedIssue) error {
+	path, err := trackedIssuesFilePath()
+	if err != nil {
+		return err
+	}
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 
@@ -48,7 +57,7 @@ func saveTrackedIssues(tracked []TrackedIssue) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	return os.WriteFile(path, data, 0o600)
 }
 
 func addTrackedIssue(issueNumber int) error {
@@ -63,7 +72,7 @@ func addTrackedIssue(issueNumber int) error {
 		}
 	}
 
-	tracked = append(tracked, TrackedIssue{Number: issueNumber})
+	tracked = append(tracked, trackedIssue{Number: issueNumber})
 	return saveTrackedIssues(tracked)
 }
 
@@ -103,6 +112,3 @@ func fetchTrackedIssuesCmd(repoDir string) tea.Cmd {
 	}
 }
 
-type trackedIssuesLoadedMsg struct {
-	issues []gh.Issue
-}

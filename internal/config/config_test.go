@@ -4,8 +4,8 @@ import "testing"
 
 func TestDefaultPollInterval(t *testing.T) {
 	cfg := DefaultConfig()
-	if cfg.PollInterval != 300 {
-		t.Errorf("expected default PollInterval 300, got %d", cfg.PollInterval)
+	if cfg.PollInterval == nil || *cfg.PollInterval != 300 {
+		t.Errorf("expected default PollInterval 300, got %v", cfg.PollInterval)
 	}
 }
 

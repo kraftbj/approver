@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -184,11 +183,11 @@ func newHome() home {
 func (h home) Init() tea.Cmd {
 	return tea.Batch(
 		h.spinner.Tick,
-		fetchPRsCmd(h.repoDir),
+		fetchPRsCmd(h.repoDir, h.cfg.PRLimit),
 		scanWorktreesCmd(h.wtManager),
 		scanIssueWorktreesCmd(h.wtManager),
 		loadReviewsCmd(),
-		fetchIssuesCmd(h.repoDir),
+		fetchIssuesCmd(h.repoDir, h.cfg.PRLimit),
 		fetchWatchlistCmd(h.repoDir),
 	)
 }
@@ -218,8 +217,8 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.reconcileWorktrees()
 		h.takeSnapshots()
 		// Schedule background polling
-		if h.cfg != nil && h.cfg.PollInterval > 0 {
-			cmds = append(cmds, pollTick(h.cfg.PollInterval))
+		if h.cfg != nil && *h.cfg.PollInterval > 0 {
+			cmds = append(cmds, pollTick(*h.cfg.PollInterval))
 		}
 
 	case trackedPRsLoadedMsg:
@@ -257,7 +256,12 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case worktreeDeletedMsg:
 		delete(h.worktrees, msg.prNumber)
+		if session, ok := h.tmuxSessions[msg.prNumber]; ok {
+			session.Kill()
+			delete(h.tmuxSessions, msg.prNumber)
+		}
 		h.reconcileWorktrees()
+		h.reconcileClaudeState()
 
 	case worktreesScanMsg:
 		h.worktrees = msg.worktrees
@@ -276,7 +280,10 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.addPRToList(msg.pr)
 		h.state = stateDefault
 		h.inputBuffer = ""
-		addTrackedPR(msg.pr.Number)
+		if err := addTrackedPR(msg.pr.Number); err != nil {
+			h.showError(fmt.Sprintf("Failed to save tracked PR: %v", err))
+			cmds = append(cmds, clearErrorAfter(3*time.Second))
+		}
 
 	case prAddErrorMsg:
 		h.state = stateDefault
@@ -295,7 +302,10 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		delete(h.reviewing, msg.prNumber)
 		delete(h.reviewStep, msg.prNumber)
 		h.reconcileClaudeState()
-		saveReviewResult(msg.prNumber, msg.review)
+		if err := saveReviewResult(msg.prNumber, msg.review); err != nil {
+			h.showError(fmt.Sprintf("Failed to save review: %v", err))
+			cmds = append(cmds, clearErrorAfter(3*time.Second))
+		}
 
 	case claudeReviewErrorMsg:
 		delete(h.reviewing, msg.prNumber)
@@ -322,7 +332,7 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case prApprovedMsg:
-		h.showError(fmt.Sprintf("PR #%d approved", msg.prNumber))
+		h.showInfo(fmt.Sprintf("PR #%d approved", msg.prNumber))
 		cmds = append(cmds, clearErrorAfter(3*time.Second))
 		cmds = append(cmds, fetchSinglePRCmd(h.repoDir, fmt.Sprintf("%d", msg.prNumber)))
 
@@ -331,7 +341,7 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, clearErrorAfter(5*time.Second))
 
 	case branchUpdatedMsg:
-		h.showError(fmt.Sprintf("Branch updated for PR #%d", msg.prNumber))
+		h.showInfo(fmt.Sprintf("Branch updated for PR #%d", msg.prNumber))
 		cmds = append(cmds, clearErrorAfter(3*time.Second))
 		pr := h.pr.prList.SelectedPR()
 		if pr != nil && pr.Number == msg.prNumber {
@@ -345,7 +355,7 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, clearErrorAfter(5*time.Second))
 
 	case branchPushedMsg:
-		h.showError(fmt.Sprintf("Branch pushed for PR #%d", msg.prNumber))
+		h.showInfo(fmt.Sprintf("Branch pushed for PR #%d", msg.prNumber))
 		cmds = append(cmds, clearErrorAfter(3*time.Second))
 
 	case branchPushErrorMsg:
@@ -354,9 +364,9 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case pollTickMsg:
 		if !h.loading {
-			cmds = append(cmds, pollPRsCmd(h.repoDir))
-		} else if h.cfg != nil && h.cfg.PollInterval > 0 {
-			cmds = append(cmds, pollTick(h.cfg.PollInterval))
+			cmds = append(cmds, pollPRsCmd(h.repoDir, h.cfg.PRLimit))
+		} else if h.cfg != nil && *h.cfg.PollInterval > 0 {
+			cmds = append(cmds, pollTick(*h.cfg.PollInterval))
 		}
 
 	case pollPRsLoadedMsg:
@@ -367,12 +377,12 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.reconcileClaudeState()
 		h.reconcileNotifications()
 		h.takeSnapshots()
-		if h.cfg != nil && h.cfg.PollInterval > 0 {
-			cmds = append(cmds, pollTick(h.cfg.PollInterval))
+		if h.cfg != nil && *h.cfg.PollInterval > 0 {
+			cmds = append(cmds, pollTick(*h.cfg.PollInterval))
 		}
 
 	case prChangesRequestedMsg:
-		h.showError(fmt.Sprintf("Changes requested on PR #%d", msg.prNumber))
+		h.showInfo(fmt.Sprintf("Changes requested on PR #%d", msg.prNumber))
 		cmds = append(cmds, clearErrorAfter(3*time.Second))
 		cmds = append(cmds, fetchSinglePRCmd(h.repoDir, fmt.Sprintf("%d", msg.prNumber)))
 
@@ -410,6 +420,7 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		h.issues.issueList.SetIssues(msg.issues)
 		h.reconcileIssueWorktrees()
+		h.reconcileIssueTmuxSessions()
 		cmds = append(cmds, fetchTrackedIssuesCmd(h.repoDir))
 
 	case trackedIssuesLoadedMsg:
@@ -417,6 +428,7 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.addIssueToList(issue)
 		}
 		h.reconcileIssueWorktrees()
+		h.reconcileIssueTmuxSessions()
 
 	case issuesErrorMsg:
 		if h.active == screenIssues && h.loading {
@@ -430,7 +442,10 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.addIssueToList(msg.issue)
 		h.state = stateDefault
 		h.inputBuffer = ""
-		addTrackedIssue(msg.issue.Number)
+		if err := addTrackedIssue(msg.issue.Number); err != nil {
+			h.showError(fmt.Sprintf("Failed to save tracked issue: %v", err))
+			cmds = append(cmds, clearErrorAfter(3*time.Second))
+		}
 
 	case issueAddErrorMsg:
 		h.state = stateDefault
@@ -442,6 +457,7 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.issueWorktrees[msg.issueNumber] = msg.path
 		delete(h.creatingIssueWorktrees, msg.issueNumber)
 		h.reconcileIssueWorktrees()
+		h.reconcileIssueTmuxSessions()
 		if h.pendingIssue != pendingIssueNone && h.pendingIssueNum == msg.issueNumber {
 			cmd := h.dispatchIssuePending(msg.issueNumber, msg.path)
 			if cmd != nil {
@@ -451,7 +467,12 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case issueWorktreeDeletedMsg:
 		delete(h.issueWorktrees, msg.issueNumber)
+		if session, ok := h.issueTmuxSessions[msg.issueNumber]; ok {
+			session.Kill()
+			delete(h.issueTmuxSessions, msg.issueNumber)
+		}
 		h.reconcileIssueWorktrees()
+		h.reconcileIssueTmuxSessions()
 
 	case issueWorktreeErrorMsg:
 		delete(h.creatingIssueWorktrees, msg.issueNumber)
@@ -486,12 +507,23 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.addWatchlistPR(msg.pr)
 		h.state = stateDefault
 		h.inputBuffer = ""
-		addTrackedPR(msg.pr.Number)
+		if err := addTrackedPR(msg.pr.Number); err != nil {
+			h.showError(fmt.Sprintf("Failed to save tracked PR: %v", err))
+			cmds = append(cmds, clearErrorAfter(3*time.Second))
+		}
 
 	case watchlistAddErrorMsg:
 		h.state = stateDefault
 		h.inputBuffer = ""
 		h.showError(fmt.Sprintf("Failed to add PR to watchlist: %v", msg.err))
+		cmds = append(cmds, clearErrorAfter(3*time.Second))
+
+	case browserErrorMsg:
+		h.showError(fmt.Sprintf("Failed to open browser: %v", msg.err))
+		cmds = append(cmds, clearErrorAfter(3*time.Second))
+
+	case trackedRemoveErrorMsg:
+		h.showError(fmt.Sprintf("Failed to update tracked list: %v", msg.err))
 		cmds = append(cmds, clearErrorAfter(3*time.Second))
 
 	case tea.KeyMsg:
@@ -586,7 +618,7 @@ func (h *home) handleConfirmKey(key string) tea.Cmd {
 			pr := h.pr.prList.SelectedPR()
 			if pr != nil {
 				wtPath := h.worktrees[pr.Number]
-				return pushBranchCmd(wtPath, pr.HeadRefName, pr.Number)
+				return pushBranchCmd(wtPath, pr.Number)
 			}
 		case confirmDeleteIssueWorktree:
 			issue := h.issues.issueList.SelectedIssue()
@@ -687,7 +719,16 @@ func (h home) View() string {
 	case stateInput:
 		hints = ui.InputHints()
 	default:
-		hints = ui.DefaultHints()
+		switch h.active {
+		case screenReviews:
+			hints = h.pr.Hints()
+		case screenIssues:
+			hints = h.issues.Hints()
+		case screenWatchlist:
+			hints = h.watchlist.Hints()
+		default:
+			hints = ui.DefaultHints()
+		}
 	}
 	menuView := h.menu.ViewWithScreen(hints, screenIndicator)
 
@@ -703,553 +744,9 @@ func (h home) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
-func (h *home) viewLoading(height int) string {
-	content := fmt.Sprintf("\n\n  %s Fetching PRs...", h.spinner.View())
-	return lipgloss.NewStyle().Width(h.width).Height(height).Render(content)
-}
-
-func (h *home) viewEmpty(height int) string {
-	content := ui.DimStyle.Render("\n\n  No PRs requesting your review.\n\n  Press R to refresh.")
-	return lipgloss.NewStyle().Width(h.width).Height(height).Render(content)
-}
-
-func (h *home) viewHelp(height int) string {
-	helpText := `
-  Approver - GitHub AI Workflow Hub
-
-  Screens:
-    1              Reviews (PRs requesting your review)
-    2              Issues (assigned issues)
-    3              Watchlist (tracked PRs)
-
-  Navigation:
-    j/k, up/down   Navigate list
-    Tab            Cycle detail panel view
-
-  Reviews:
-    w              Create worktree for selected PR
-    W              Delete worktree (with confirmation)
-    c              Start/cancel Claude review (auto-creates worktree)
-    t              Open Claude tmux session (auto-creates worktree)
-    A              Approve PR (with confirmation)
-    X              Request changes (with reason)
-    u              Update branch (merge base into worktree)
-
-  Issues:
-    w              Create worktree for selected issue
-    W              Delete worktree (with confirmation)
-    c              Start Claude tmux session (auto-creates worktree)
-    p              Open linked PR in browser
-    a              Add issue by number or URL
-    d              Remove manually-tracked issue
-
-  Common:
-    o              Open in browser
-    R              Refresh
-    ?              Show this help
-    q              Quit
-    ctrl+c         Force quit
-
-  Press any key to dismiss.`
-
-	style := lipgloss.NewStyle().
-		Width(h.width).
-		Height(height).
-		Align(lipgloss.Center, lipgloss.Center)
-
-	boxStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ui.ColorCyan).
-		Padding(1, 2)
-
-	return style.Render(boxStyle.Render(helpText))
-}
-
-func (h *home) viewConfirmOverlay(base string, height int) string {
-	overlay := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ui.ColorYellow).
-		Padding(1, 2).
-		Render(h.confirmMsg)
-
-	return placeOverlay(h.width, height, base, overlay)
-}
-
-func (h *home) viewInputOverlay(base string, height int) string {
-	content := fmt.Sprintf("%s%s_", h.inputPrompt, h.inputBuffer)
-	overlay := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ui.ColorCyan).
-		Padding(0, 2).
-		Render(content)
-
-	return placeOverlay(h.width, height, base, overlay)
-}
-
-func placeOverlay(width, height int, base, overlay string) string {
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, overlay,
-		lipgloss.WithWhitespaceChars(" "),
-	)
-}
-
-func (h *home) layoutPanels() {
-	menuHeight := 2
-	panelHeight := h.height - menuHeight
-
-	listWidth := h.width * 30 / 100
-	detailWidth := h.width - listWidth
-
-	h.pr.prList.SetSize(listWidth, panelHeight)
-	h.pr.detail.SetSize(detailWidth, panelHeight)
-
-	h.issues.issueList.SetSize(listWidth, panelHeight)
-	h.issues.detail.SetSize(detailWidth, panelHeight)
-
-	h.watchlist.prList.SetSize(listWidth, panelHeight)
-	h.watchlist.detail.SetSize(detailWidth, panelHeight)
-
-	h.menu.SetWidth(h.width)
-	h.errBox.SetWidth(h.width)
-}
-
-func (h *home) showError(msg string) {
-	h.errBox.SetError(msg)
-}
-
-func (h *home) reconcileWorktrees() {
-	for i := range h.pr.prList.PRs {
-		num := h.pr.prList.PRs[i].Number
-		_, exists := h.worktrees[num]
-		h.pr.prList.PRs[i].HasWorktree = exists
-		h.pr.prList.PRs[i].IsCreatingWorktree = h.creatingWorktrees[num]
-	}
-}
-
-func (h *home) reconcileClaudeState() {
-	for i := range h.pr.prList.PRs {
-		num := h.pr.prList.PRs[i].Number
-		_, hasReview := h.reviews[num]
-		_, isReviewing := h.reviewing[num]
-		session, hasTmux := h.tmuxSessions[num]
-		h.pr.prList.PRs[i].HasReview = hasReview
-		h.pr.prList.PRs[i].IsReviewing = isReviewing
-		h.pr.prList.PRs[i].HasTmux = hasTmux && session.Exists()
-	}
-}
-
-func (h *home) takeSnapshots() {
-	for _, pr := range h.pr.prList.PRs {
-		h.prSnapshots[pr.Number] = prSnapshot{
-			commentCount:   pr.CommentCount,
-			ciStatus:       pr.CIStatus(),
-			reviewDecision: pr.ReviewDecision,
-		}
-	}
-}
-
-func (h *home) reconcileNotifications() {
-	for i := range h.pr.prList.PRs {
-		pr := &h.pr.prList.PRs[i]
-		snap, exists := h.prSnapshots[pr.Number]
-		if !exists {
-			continue
-		}
-		if pr.CommentCount != snap.commentCount ||
-			pr.CIStatus() != snap.ciStatus ||
-			pr.ReviewDecision != snap.reviewDecision {
-			pr.HasNotification = true
-		}
-	}
-}
-
-func (h *home) reconcileIssueWorktrees() {
-	for i := range h.issues.issueList.Issues {
-		num := h.issues.issueList.Issues[i].Number
-		_, exists := h.issueWorktrees[num]
-		h.issues.issueList.Issues[i].HasWorktree = exists
-		h.issues.issueList.Issues[i].IsCreatingWorktree = h.creatingIssueWorktrees[num]
-	}
-}
-
-func (h *home) addIssueToList(issue gh.Issue) {
-	for i, existing := range h.issues.issueList.Issues {
-		if existing.Number == issue.Number {
-			h.issues.issueList.Issues[i] = issue
-			return
-		}
-	}
-	h.issues.issueList.Issues = append(h.issues.issueList.Issues, issue)
-}
-
-func (h *home) removeIssue(number int) {
-	for i, issue := range h.issues.issueList.Issues {
-		if issue.Number == number {
-			h.issues.issueList.Issues = append(h.issues.issueList.Issues[:i], h.issues.issueList.Issues[i+1:]...)
-			if h.issues.issueList.Selected >= len(h.issues.issueList.Issues) {
-				h.issues.issueList.Selected = max(0, len(h.issues.issueList.Issues)-1)
-			}
-			return
-		}
-	}
-}
-
-func (h *home) startIssueTmux(issueNumber int, wtPath string) tea.Cmd {
-	session, ok := h.issueTmuxSessions[issueNumber]
-	if !ok || !session.Exists() {
-		session = claude.NewIssueTmuxSession(issueNumber, wtPath)
-		if err := session.Create(); err != nil {
-			h.showError(fmt.Sprintf("Failed to create tmux session: %v", err))
-			return clearErrorAfter(3 * time.Second)
-		}
-		h.issueTmuxSessions[issueNumber] = session
-	}
-	return tea.ExecProcess(session.AttachCmd(), func(err error) tea.Msg {
-		if err != nil {
-			return tmuxSessionErrorMsg{err: err}
-		}
-		return nil
-	})
-}
-
-func (h *home) dispatchIssuePending(issueNumber int, wtPath string) tea.Cmd {
-	action := h.pendingIssue
-	h.clearIssuePending()
-	switch action {
-	case pendingIssueTmux:
-		return h.startIssueTmux(issueNumber, wtPath)
-	}
-	return nil
-}
-
-func (h *home) clearIssuePending() {
-	h.pendingIssue = pendingIssueNone
-	h.pendingIssueNum = 0
-}
-
-func (h *home) addWatchlistPR(pr gh.PR) {
-	for i, existing := range h.watchlist.prList.PRs {
-		if existing.Number == pr.Number {
-			h.watchlist.prList.PRs[i] = pr
-			return
-		}
-	}
-	h.watchlist.prList.PRs = append(h.watchlist.prList.PRs, pr)
-}
-
-func (h *home) removeWatchlistPR(number int) {
-	for i, pr := range h.watchlist.prList.PRs {
-		if pr.Number == number {
-			h.watchlist.prList.PRs = append(h.watchlist.prList.PRs[:i], h.watchlist.prList.PRs[i+1:]...)
-			if h.watchlist.prList.Selected >= len(h.watchlist.prList.PRs) {
-				h.watchlist.prList.Selected = max(0, len(h.watchlist.prList.PRs)-1)
-			}
-			return
-		}
-	}
-}
-
-func (h *home) addPRToList(pr gh.PR) {
-	for i, existing := range h.pr.prList.PRs {
-		if existing.Number == pr.Number {
-			h.pr.prList.PRs[i] = pr
-			return
-		}
-	}
-	h.pr.prList.PRs = append(h.pr.prList.PRs, pr)
-}
-
-func (h *home) removePR(number int) {
-	for i, pr := range h.pr.prList.PRs {
-		if pr.Number == number {
-			h.pr.prList.PRs = append(h.pr.prList.PRs[:i], h.pr.prList.PRs[i+1:]...)
-			if h.pr.prList.Selected >= len(h.pr.prList.PRs) {
-				h.pr.prList.Selected = max(0, len(h.pr.prList.PRs)-1)
-			}
-			return
-		}
-	}
-}
-
-// Commands
-
-func fetchPRsCmd(repoDir string) tea.Cmd {
-	return func() tea.Msg {
-		prs, err := gh.FetchPRs(repoDir)
-		if err != nil {
-			return prsErrorMsg{err: err}
-		}
-		return prsLoadedMsg{prs: prs}
-	}
-}
-
-func fetchSinglePRCmd(repoDir, numberOrURL string) tea.Cmd {
-	return func() tea.Msg {
-		pr, err := gh.FetchPR(repoDir, numberOrURL)
-		if err != nil {
-			return prAddErrorMsg{err: err}
-		}
-		return prAddedMsg{pr: *pr}
-	}
-}
-
-func clearErrorAfter(d time.Duration) tea.Cmd {
-	return tea.Tick(d, func(time.Time) tea.Msg {
-		return hideErrMsg{}
-	})
-}
-
-func openInBrowserCmd(url string) tea.Cmd {
-	return func() tea.Msg {
-		exec.Command("open", url).Run()
-		return nil
-	}
-}
-
-func createWorktreeCmd(mgr *worktree.Manager, prNumber int, branch string) tea.Cmd {
-	return func() tea.Msg {
-		path, err := mgr.Create(prNumber, branch)
-		if err != nil {
-			return worktreeErrorMsg{prNumber: prNumber, err: err}
-		}
-		return worktreeCreatedMsg{prNumber: prNumber, path: path}
-	}
-}
-
-func deleteWorktreeCmd(mgr *worktree.Manager, prNumber int) tea.Cmd {
-	return func() tea.Msg {
-		if err := mgr.Delete(prNumber); err != nil {
-			return worktreeErrorMsg{prNumber: prNumber, err: err}
-		}
-		return worktreeDeletedMsg{prNumber: prNumber}
-	}
-}
-
-func scanWorktreesCmd(mgr *worktree.Manager) tea.Cmd {
-	return func() tea.Msg {
-		wts, _ := mgr.ScanExisting()
-		return worktreesScanMsg{worktrees: wts}
-	}
-}
-
-type worktreesScanMsg struct {
-	worktrees map[int]string
-}
-
-type issueWorktreesScanMsg struct {
-	worktrees map[int]string
-}
-
-func scanIssueWorktreesCmd(mgr *worktree.Manager) tea.Cmd {
-	return func() tea.Msg {
-		wts, _ := mgr.ScanIssueWorktrees()
-		return issueWorktreesScanMsg{worktrees: wts}
-	}
-}
-
-func pollTick(intervalSeconds int) tea.Cmd {
-	return tea.Tick(time.Duration(intervalSeconds)*time.Second, func(time.Time) tea.Msg {
-		return pollTickMsg{}
-	})
-}
-
-func pollPRsCmd(repoDir string) tea.Cmd {
-	return func() tea.Msg {
-		prs, err := gh.FetchPRs(repoDir)
-		if err != nil {
-			return nil
-		}
-		return pollPRsLoadedMsg{prs: prs}
-	}
-}
-
-func fetchCommentsCmd(repoDir string, prNumber int) tea.Cmd {
-	return func() tea.Msg {
-		comments, err := gh.FetchComments(repoDir, prNumber)
-		if err != nil {
-			return commentsErrorMsg{prNumber: prNumber, err: err}
-		}
-		return commentsLoadedMsg{prNumber: prNumber, comments: comments}
-	}
-}
-
-func removeTrackedPRCmd(prNumber int) tea.Cmd {
-	return func() tea.Msg {
-		removeTrackedPR(prNumber)
-		return nil
-	}
-}
-
-func runClaudeReviewCmd(ctx context.Context, cfg *config.Config, prNumber int, worktreePath, repoDir string) tea.Cmd {
-	return func() tea.Msg {
-		prompt := ""
-		allowedTools := ""
-		if cfg != nil {
-			prompt = cfg.ReviewPrompt
-			allowedTools = cfg.AllowedTools
-		}
-		result, err := claude.RunReviewPipeline(ctx, worktreePath, repoDir, prNumber, prompt, allowedTools, nil)
-		if err != nil {
-			return claudeReviewErrorMsg{prNumber: prNumber, err: err}
-		}
-		return claudeReviewDoneMsg{prNumber: prNumber, review: *result}
-	}
-}
-
-var funReviewMessages = []string{
-	"Reading the diff with fresh eyes...",
-	"Checking for off-by-one errors...",
-	"Looking for forgotten TODOs...",
-	"Sniffing out race conditions...",
-	"Pondering variable names...",
-	"Hunting for edge cases...",
-	"Scrutinizing error handling...",
-	"Questioning every nil check...",
-	"Considering the blast radius...",
-	"Almost there, double-checking...",
-}
-
-func (h *home) startReview(prNumber int, wtPath string) tea.Cmd {
-	h.pr.detailMode = detailReview
-	ctx, cancel := context.WithCancel(context.Background())
-	h.reviewing[prNumber] = cancel
-	h.reviewStep[prNumber] = funReviewMessages[0]
-	h.reviewMsgIdx = 0
-	h.reconcileClaudeState()
-	return tea.Batch(
-		h.spinner.Tick,
-		runClaudeReviewCmd(ctx, h.cfg, prNumber, wtPath, h.repoDir),
-		reviewSpinnerTick(),
-	)
-}
-
-func (h *home) startTmux(prNumber int, wtPath string) tea.Cmd {
-	session, ok := h.tmuxSessions[prNumber]
-	if !ok || !session.Exists() {
-		session = claude.NewTmuxSession(prNumber, wtPath)
-		if err := session.Create(); err != nil {
-			h.showError(fmt.Sprintf("Failed to create tmux session: %v", err))
-			return clearErrorAfter(3 * time.Second)
-		}
-		h.tmuxSessions[prNumber] = session
-		h.reconcileClaudeState()
-	}
-	return tea.ExecProcess(session.AttachCmd(), func(err error) tea.Msg {
-		if err != nil {
-			return tmuxSessionErrorMsg{err: err}
-		}
-		return nil
-	})
-}
-
-func (h *home) dispatchPending(prNumber int, wtPath string) tea.Cmd {
-	action := h.pending
-	h.clearPending()
-	switch action {
-	case pendingReview:
-		return h.startReview(prNumber, wtPath)
-	case pendingTmux:
-		return h.startTmux(prNumber, wtPath)
-	}
-	return nil
-}
-
-func (h *home) clearPending() {
-	h.pending = pendingNone
-	h.pendingPR = 0
-}
-
-func (h *home) repoSetupCommand() string {
-	if h.cfg == nil {
-		return ""
-	}
-	remoteURL, err := gh.ParseRepoFromDir(h.repoDir)
-	if err != nil {
-		return ""
-	}
-	return h.cfg.RepoSetupCommand(remoteURL)
-}
-
-func reviewSpinnerTick() tea.Cmd {
-	return tea.Tick(4*time.Second, func(time.Time) tea.Msg {
-		return reviewSpinnerTickMsg{}
-	})
-}
-
-func updateBranchCmd(wtPath, baseBranch string, prNumber int) tea.Cmd {
-	return func() tea.Msg {
-		fetchCmd := exec.Command("git", "-C", wtPath, "fetch", "origin", baseBranch)
-		if out, err := fetchCmd.CombinedOutput(); err != nil {
-			return branchUpdateErrorMsg{prNumber: prNumber, err: fmt.Errorf("fetch: %s", string(out))}
-		}
-		mergeCmd := exec.Command("git", "-C", wtPath, "merge", fmt.Sprintf("origin/%s", baseBranch))
-		if out, err := mergeCmd.CombinedOutput(); err != nil {
-			return branchUpdateErrorMsg{prNumber: prNumber, err: fmt.Errorf("merge: %s", string(out))}
-		}
-		return branchUpdatedMsg{prNumber: prNumber}
-	}
-}
-
-func pushBranchCmd(wtPath, headBranch string, prNumber int) tea.Cmd {
-	return func() tea.Msg {
-		cmd := exec.Command("git", "-C", wtPath, "push", "origin", "HEAD")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return branchPushErrorMsg{prNumber: prNumber, err: fmt.Errorf("%s", string(out))}
-		}
-		return branchPushedMsg{prNumber: prNumber}
-	}
-}
-
-func requestChangesPRCmd(repoDir string, prNumber int, body string) tea.Cmd {
-	return func() tea.Msg {
-		cmd := exec.Command("gh", "pr", "review", fmt.Sprintf("%d", prNumber), "--request-changes", "--body", body)
-		if repoDir != "" {
-			cmd.Dir = repoDir
-		}
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return prChangesRequestErrorMsg{prNumber: prNumber, err: fmt.Errorf("%s", string(out))}
-		}
-		return prChangesRequestedMsg{prNumber: prNumber}
-	}
-}
-
-func approvePRCmd(repoDir string, prNumber int) tea.Cmd {
-	return func() tea.Msg {
-		cmd := exec.Command("gh", "pr", "review", fmt.Sprintf("%d", prNumber), "--approve")
-		if repoDir != "" {
-			cmd.Dir = repoDir
-		}
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return prApproveErrorMsg{prNumber: prNumber, err: fmt.Errorf("%s", string(out))}
-		}
-		return prApprovedMsg{prNumber: prNumber}
-	}
-}
-
-func runSetupCmd(wtPath, setupCommand string, prNumber int) tea.Cmd {
-	return func() tea.Msg {
-		cmd := exec.Command("sh", "-c", setupCommand)
-		cmd.Dir = wtPath
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return setupErrorMsg{prNumber: prNumber, err: fmt.Errorf("%s: %s", err, string(out))}
-		}
-		return setupDoneMsg{prNumber: prNumber, wtPath: wtPath}
-	}
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 func Run() error {
 	if err := gh.CheckGH(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	repoDir, err := os.Getwd()
@@ -1258,15 +755,22 @@ func Run() error {
 	}
 
 	if err := gh.CheckGitRepo(repoDir); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	cfg := config.LoadConfig()
 
 	h := newHome()
 	h.repoDir = repoDir
-	h.wtManager = worktree.NewManager(repoDir)
+	worktreeDir := ""
+	if cfg != nil {
+		worktreeDir = cfg.WorktreeDir
+	}
+	wtm, err := worktree.NewManager(repoDir, worktreeDir)
+	if err != nil {
+		return fmt.Errorf("initializing worktree manager: %w", err)
+	}
+	h.wtManager = wtm
 	h.cfg = cfg
 
 	p := tea.NewProgram(h, tea.WithAltScreen())

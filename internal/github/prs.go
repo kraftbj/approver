@@ -3,21 +3,25 @@ package github
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os/exec"
 	"strconv"
 	"strings"
 )
 
 // ghPRFields is the set of fields we request from gh pr list/view.
-const ghPRFields = "number,title,author,headRefName,baseRefName,mergeable,url,reviewDecision,statusCheckRollup,labels,additions,deletions,updatedAt,reviewRequests,latestReviews"
+const ghPRFields = "number,title,author,headRefName,baseRefName,url,reviewDecision,statusCheckRollup,labels,additions,deletions,updatedAt,reviewRequests,latestReviews,comments"
 
 // FetchPRs fetches all PRs where the current user's review is requested.
 // repoDir is used as the working directory for the gh command (determines which repo).
-func FetchPRs(repoDir string) ([]PR, error) {
+func FetchPRs(repoDir string, limit int) ([]PR, error) {
+	if limit <= 0 {
+		limit = 50
+	}
 	cmd := exec.Command("gh", "pr", "list",
 		"--search", "review-requested:@me",
 		"--json", ghPRFields,
-		"--limit", "50",
+		"--limit", strconv.Itoa(limit),
 	)
 	if repoDir != "" {
 		cmd.Dir = repoDir
@@ -38,6 +42,7 @@ func FetchPRs(repoDir string) ([]PR, error) {
 
 	for i := range prs {
 		prs[i].Source = "review-requested"
+		prs[i].CommentCount = len(prs[i].Comments)
 	}
 
 	return prs, nil
@@ -45,14 +50,7 @@ func FetchPRs(repoDir string) ([]PR, error) {
 
 // FetchPR fetches a single PR by number or URL.
 func FetchPR(repoDir string, numberOrURL string) (*PR, error) {
-	// Determine if this is a URL or a number
-	ref := numberOrURL
-	if _, err := strconv.Atoi(numberOrURL); err != nil {
-		// Not a plain number - treat as URL, extract the number or pass the URL directly
-		ref = numberOrURL
-	}
-
-	cmd := exec.Command("gh", "pr", "view", ref,
+	cmd := exec.Command("gh", "pr", "view", "--", numberOrURL,
 		"--json", ghPRFields,
 	)
 	if repoDir != "" {
@@ -73,6 +71,7 @@ func FetchPR(repoDir string, numberOrURL string) (*PR, error) {
 	}
 
 	pr.Source = "manual"
+	pr.CommentCount = len(pr.Comments)
 	return &pr, nil
 }
 
@@ -112,6 +111,7 @@ func CheckGH() error {
 	// Use "gh auth token" - exits 0 and prints token if authenticated,
 	// exits 1 if not. Simpler and more reliable than "gh auth status".
 	cmd := exec.Command("gh", "auth", "token")
+	cmd.Stdout = io.Discard
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("gh is not authenticated. Run 'gh auth login' first")
 	}

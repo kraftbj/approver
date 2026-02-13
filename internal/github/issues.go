@@ -11,11 +11,14 @@ import (
 const ghIssueFields = "number,title,author,labels,assignees,state,body,url,updatedAt,closedByPullRequestsReferences"
 
 // FetchIssues fetches all issues assigned to the current user.
-func FetchIssues(repoDir string) ([]Issue, error) {
+func FetchIssues(repoDir string, limit int) ([]Issue, error) {
+	if limit <= 0 {
+		limit = 50
+	}
 	cmd := exec.Command("gh", "issue", "list",
 		"--assignee", "@me",
 		"--json", ghIssueFields,
-		"--limit", "50",
+		"--limit", strconv.Itoa(limit),
 	)
 	if repoDir != "" {
 		cmd.Dir = repoDir
@@ -43,12 +46,7 @@ func FetchIssues(repoDir string) ([]Issue, error) {
 
 // FetchIssue fetches a single issue by number or URL.
 func FetchIssue(repoDir string, numberOrURL string) (*Issue, error) {
-	ref := numberOrURL
-	if _, err := strconv.Atoi(numberOrURL); err != nil {
-		ref = numberOrURL
-	}
-
-	cmd := exec.Command("gh", "issue", "view", ref,
+	cmd := exec.Command("gh", "issue", "view", "--", numberOrURL,
 		"--json", ghIssueFields,
 	)
 	if repoDir != "" {

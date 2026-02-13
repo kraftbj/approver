@@ -44,7 +44,7 @@ func (s *prScreen) HandleKey(h *home, key string) tea.Cmd {
 	case "R":
 		h.loading = true
 		h.state = stateLoading
-		return tea.Batch(h.spinner.Tick, fetchPRsCmd(h.repoDir))
+		return tea.Batch(h.spinner.Tick, fetchPRsCmd(h.repoDir, h.cfg.PRLimit))
 
 	case "o":
 		pr := s.prList.SelectedPR()
@@ -186,6 +186,20 @@ func (s *prScreen) HandleKey(h *home, key string) tea.Cmd {
 	return nil
 }
 
+func (s *prScreen) Hints() []ui.KeyHint {
+	return []ui.KeyHint{
+		{Key: "j/k", Desc: "navigate"},
+		{Key: "w", Desc: "worktree"},
+		{Key: "c", Desc: "review"},
+		{Key: "t", Desc: "tmux"},
+		{Key: "A", Desc: "approve"},
+		{Key: "o", Desc: "open"},
+		{Key: "R", Desc: "refresh"},
+		{Key: "?", Desc: "help"},
+		{Key: "q", Desc: "quit"},
+	}
+}
+
 func (s *prScreen) View(h *home, height int) string {
 	if h.loading && len(s.prList.PRs) == 0 {
 		return h.viewLoading(height)
@@ -197,8 +211,7 @@ func (s *prScreen) View(h *home, height int) string {
 }
 
 func (s *prScreen) viewDashboard(h *home, height int) string {
-	listWidth := h.width * 30 / 100
-	detailWidth := h.width - listWidth
+	listWidth, detailWidth := screenLayout(h.width)
 
 	s.prList.SetSize(listWidth, height)
 	s.detail.SetSize(detailWidth, height)

@@ -19,15 +19,12 @@ type Config struct {
 	// ReviewPrompt overrides the default Agent 1 review prompt.
 	ReviewPrompt string `yaml:"review_prompt,omitempty"`
 
-	// ReviewBudget is the max USD per review (default: 1.00).
-	ReviewBudget float64 `yaml:"review_budget,omitempty"`
-
 	// AllowedTools is the set of tools review agents can use (default: "Read,Glob,Grep").
 	AllowedTools string `yaml:"allowed_tools,omitempty"`
 
 	// PollInterval is the number of seconds between background PR refreshes.
 	// Default: 300 (5 minutes). Set to 0 to disable polling.
-	PollInterval int `yaml:"poll_interval,omitempty"`
+	PollInterval *int `yaml:"poll_interval,omitempty"`
 
 	// Repos holds per-repository configuration keyed by a substring of the remote URL.
 	Repos map[string]RepoConfig `yaml:"repos,omitempty"`
@@ -55,23 +52,33 @@ func (c *Config) RepoSetupCommand(repoURL string) string {
 
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() *Config {
+	defaultPoll := 300
+	defaultLimit := 50
 	return &Config{
-		PRLimit:      50,
-		PollInterval: 300,
+		PRLimit:      defaultLimit,
+		PollInterval: &defaultPoll,
+		AllowedTools: "Read,Glob,Grep",
 	}
 }
 
 // configPath returns the path to the config file.
-func configPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "approver", "config.yaml")
+func configPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "approver", "config.yaml"), nil
 }
 
 // LoadConfig reads config from disk, falling back to defaults.
 func LoadConfig() *Config {
 	cfg := DefaultConfig()
 
-	data, err := os.ReadFile(configPath())
+	path, err := configPath()
+	if err != nil {
+		return cfg
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return cfg
 	}
@@ -80,18 +87,16 @@ func LoadConfig() *Config {
 		return DefaultConfig()
 	}
 
-	// Apply defaults for zero values
+	// Apply defaults for unset values
+	if cfg.PollInterval == nil {
+		defaultPoll := 300
+		cfg.PollInterval = &defaultPoll
+	}
 	if cfg.PRLimit <= 0 {
 		cfg.PRLimit = 50
 	}
-	if cfg.ReviewBudget <= 0 {
-		cfg.ReviewBudget = 1.00
-	}
 	if cfg.AllowedTools == "" {
 		cfg.AllowedTools = "Read,Glob,Grep"
-	}
-	if cfg.PollInterval == 0 {
-		cfg.PollInterval = 300
 	}
 
 	return cfg

@@ -116,9 +116,6 @@ func (l *IssueList) renderIssueItem(issue gh.Issue, selected bool, width int) (s
 	if issue.HasTmux {
 		prefix += ManualBadgeStyle.Render("T")
 	}
-	if issue.IsWorking {
-		prefix += CIStyle("pending").Render("~")
-	}
 	if issue.IsCreatingWorktree {
 		prefix += CIStyle("pending").Render("W")
 	}

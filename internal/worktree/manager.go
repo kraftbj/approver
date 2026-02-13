@@ -20,12 +20,16 @@ type Manager struct {
 }
 
 // NewManager creates a worktree manager with default paths.
-func NewManager(repoDir string) *Manager {
-	home, _ := os.UserHomeDir()
-	return &Manager{
-		BaseDir: filepath.Join(home, ".config", "approver", "worktrees"),
-		RepoDir: repoDir,
+func NewManager(repoDir string, worktreeDir string) (*Manager, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("getting home directory: %w", err)
 	}
+	baseDir := filepath.Join(home, ".config", "approver", "worktrees")
+	if worktreeDir != "" {
+		baseDir = worktreeDir
+	}
+	return &Manager{BaseDir: baseDir, RepoDir: repoDir}, nil
 }
 
 // WorktreePath returns the path for a PR's worktree.
@@ -40,7 +44,7 @@ func (m *Manager) Create(prNumber int, branch string) (string, error) {
 	path := m.WorktreePath(prNumber, branch)
 
 	// Ensure base directory exists
-	if err := os.MkdirAll(m.BaseDir, 0o755); err != nil {
+	if err := os.MkdirAll(m.BaseDir, 0o700); err != nil {
 		return "", fmt.Errorf("creating worktree directory: %w", err)
 	}
 
@@ -50,18 +54,18 @@ func (m *Manager) Create(prNumber int, branch string) (string, error) {
 	}
 
 	// Fetch the branch from origin
-	fetchCmd := exec.Command("git", "fetch", "origin", branch)
+	fetchCmd := exec.Command("git", "fetch", "origin", "--", branch)
 	fetchCmd.Dir = m.RepoDir
 	if out, err := fetchCmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("git fetch failed: %s", string(out))
 	}
 
 	// Create the worktree with a local branch tracking the remote
-	wtCmd := exec.Command("git", "worktree", "add", "-b", branch, path, fmt.Sprintf("origin/%s", branch))
+	wtCmd := exec.Command("git", "worktree", "add", "-b", branch, "--", path, fmt.Sprintf("origin/%s", branch))
 	wtCmd.Dir = m.RepoDir
 	if out, err := wtCmd.CombinedOutput(); err != nil {
 		// Branch may already exist locally — try without -b
-		wtCmd2 := exec.Command("git", "worktree", "add", path, branch)
+		wtCmd2 := exec.Command("git", "worktree", "add", "--", path, branch)
 		wtCmd2.Dir = m.RepoDir
 		if out2, err2 := wtCmd2.CombinedOutput(); err2 != nil {
 			return "", fmt.Errorf("git worktree add failed: %s\n%s", string(out), string(out2))
@@ -128,24 +132,24 @@ func (m *Manager) ScanExisting() (map[int]string, error) {
 	return result, nil
 }
 
-// IssueBranchName returns the branch name for an issue worktree.
-func IssueBranchName(issueNumber int, title string) string {
+// issueBranchName returns the branch name for an issue worktree.
+func issueBranchName(issueNumber int, title string) string {
 	slug := sanitizeBranch(strings.ToLower(title))
 	return fmt.Sprintf("issue-%d-%s", issueNumber, slug)
 }
 
-// IssueWorktreePath returns the path for an issue's worktree.
-func (m *Manager) IssueWorktreePath(issueNumber int, title string) string {
-	branch := IssueBranchName(issueNumber, title)
+// issueWorktreePath returns the path for an issue's worktree.
+func (m *Manager) issueWorktreePath(issueNumber int, title string) string {
+	branch := issueBranchName(issueNumber, title)
 	return filepath.Join(m.BaseDir, branch)
 }
 
 // CreateForIssue creates a worktree for an issue, branching from the default branch.
 func (m *Manager) CreateForIssue(issueNumber int, title string) (string, error) {
-	branch := IssueBranchName(issueNumber, title)
+	branch := issueBranchName(issueNumber, title)
 	path := filepath.Join(m.BaseDir, branch)
 
-	if err := os.MkdirAll(m.BaseDir, 0o755); err != nil {
+	if err := os.MkdirAll(m.BaseDir, 0o700); err != nil {
 		return "", fmt.Errorf("creating worktree directory: %w", err)
 	}
 
@@ -160,14 +164,14 @@ func (m *Manager) CreateForIssue(issueNumber int, title string) (string, error) 
 	}
 
 	// Fetch latest default branch
-	fetchCmd := exec.Command("git", "fetch", "origin", defaultBranch)
+	fetchCmd := exec.Command("git", "fetch", "origin", "--", defaultBranch)
 	fetchCmd.Dir = m.RepoDir
 	if out, err := fetchCmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("git fetch failed: %s", string(out))
 	}
 
 	// Create worktree with a new branch from origin/default
-	wtCmd := exec.Command("git", "worktree", "add", "-b", branch, path, fmt.Sprintf("origin/%s", defaultBranch))
+	wtCmd := exec.Command("git", "worktree", "add", "-b", branch, "--", path, fmt.Sprintf("origin/%s", defaultBranch))
 	wtCmd.Dir = m.RepoDir
 	if out, err := wtCmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("git worktree add failed: %s", string(out))

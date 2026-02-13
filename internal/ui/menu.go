@@ -81,11 +81,6 @@ func InputHints() []KeyHint {
 	}
 }
 
-// View renders the menu bar with the given hints (no screen indicator).
-func (m *Menu) View(hints []KeyHint) string {
-	return m.ViewWithScreen(hints, "")
-}
-
 // ViewWithScreen renders the menu bar with an optional screen indicator prefix.
 func (m *Menu) ViewWithScreen(hints []KeyHint, screenIndicator string) string {
 	keyStyle := lipgloss.NewStyle().Foreground(ColorCyan).Bold(true)

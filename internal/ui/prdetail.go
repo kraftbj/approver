@@ -3,7 +3,6 @@ package ui
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	gh "github.com/kraft/approver/internal/github"
 )
@@ -154,12 +153,10 @@ func (d *PRDetail) View(pr *gh.PR) string {
 
 // ReviewDisplayData holds formatted review data for display.
 type ReviewDisplayData struct {
-	Agent1Summary string
-	Agent2Summary string
-	Checklist     string // Agent 3's full numbered checklist (primary display)
-	RawOutput     string // Full combined output
-	IssueCount    int
-	HighCount     int
+	Checklist string // Agent 3's full numbered checklist (primary display)
+	RawOutput string // Full combined output
+	IssueCount int
+	HighCount  int
 }
 
 // ViewReview renders the review results panel.
@@ -268,7 +265,7 @@ func (d *PRDetail) ViewComments(pr *gh.PR, comments []gh.Comment) string {
 	maxWidth := d.Width - 4
 	for _, c := range comments {
 		// Author + relative time
-		header := fmt.Sprintf("  @%s  %s", c.Author.Login, commentRelativeTime(c.CreatedAt))
+		header := fmt.Sprintf("  @%s  %s", c.Author.Login, gh.FormatRelativeTime(c.CreatedAt))
 		sections = append(sections, SectionHeaderStyle.Render(header))
 
 		// Body (truncate long lines)
@@ -283,32 +280,4 @@ func (d *PRDetail) ViewComments(pr *gh.PR, comments []gh.Comment) string {
 
 	content := strings.Join(sections, "\n")
 	return DetailPanelStyle.Width(d.Width).Height(d.Height).Render(content)
-}
-
-// commentRelativeTime returns a human-readable relative time.
-func commentRelativeTime(t time.Time) string {
-	d := time.Since(t)
-	switch {
-	case d < time.Minute:
-		return "just now"
-	case d < time.Hour:
-		return fmt.Sprintf("%dm ago", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh ago", int(d.Hours()))
-	default:
-		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
-	}
-}
-
-func checkIcon(status string) string {
-	switch status {
-	case "SUCCESS":
-		return CIStyle("pass").Render("*")
-	case "FAILURE", "ERROR", "TIMED_OUT", "CANCELLED":
-		return CIStyle("fail").Render("x")
-	case "IN_PROGRESS", "QUEUED", "PENDING":
-		return CIStyle("pending").Render("~")
-	default:
-		return DimStyle.Render("-")
-	}
 }

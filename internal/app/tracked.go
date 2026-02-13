@@ -10,21 +10,27 @@ import (
 	gh "github.com/kraft/approver/internal/github"
 )
 
-// TrackedPR is a minimal record for a manually-tracked PR.
-type TrackedPR struct {
+// trackedPR is a minimal record for a manually-tracked PR.
+type trackedPR struct {
 	Number int    `json:"number"`
 	Repo   string `json:"repo,omitempty"`
 }
 
 // trackedFilePath returns the path to the tracked PRs file.
-func trackedFilePath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "approver", "tracked.json")
+func trackedFilePath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("getting home directory: %w", err)
+	}
+	return filepath.Join(home, ".config", "approver", "tracked.json"), nil
 }
 
 // loadTrackedPRs reads the tracked PR list from disk.
-func loadTrackedPRs() ([]TrackedPR, error) {
-	path := trackedFilePath()
+func loadTrackedPRs() ([]trackedPR, error) {
+	path, err := trackedFilePath()
+	if err != nil {
+		return nil, err
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -33,7 +39,7 @@ func loadTrackedPRs() ([]TrackedPR, error) {
 		return nil, err
 	}
 
-	var tracked []TrackedPR
+	var tracked []trackedPR
 	if err := json.Unmarshal(data, &tracked); err != nil {
 		return nil, err
 	}
@@ -41,10 +47,13 @@ func loadTrackedPRs() ([]TrackedPR, error) {
 }
 
 // saveTrackedPRs writes the tracked PR list to disk.
-func saveTrackedPRs(tracked []TrackedPR) error {
-	path := trackedFilePath()
+func saveTrackedPRs(tracked []trackedPR) error {
+	path, err := trackedFilePath()
+	if err != nil {
+		return err
+	}
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 
@@ -52,7 +61,7 @@ func saveTrackedPRs(tracked []TrackedPR) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	return os.WriteFile(path, data, 0o600)
 }
 
 // addTrackedPR adds a PR number to the tracked list.
@@ -69,7 +78,7 @@ func addTrackedPR(prNumber int) error {
 		}
 	}
 
-	tracked = append(tracked, TrackedPR{Number: prNumber})
+	tracked = append(tracked, trackedPR{Number: prNumber})
 	return saveTrackedPRs(tracked)
 }
 
@@ -112,7 +121,3 @@ func fetchTrackedPRsCmd(repoDir string) tea.Cmd {
 	}
 }
 
-// trackedPRsLoadedMsg carries the fetched tracked PRs.
-type trackedPRsLoadedMsg struct {
-	prs []gh.PR
-}

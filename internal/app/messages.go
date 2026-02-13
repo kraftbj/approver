@@ -5,6 +5,41 @@ import (
 	gh "github.com/kraft/approver/internal/github"
 )
 
+// worktreesScanMsg carries the result of scanning existing worktrees.
+type worktreesScanMsg struct {
+	worktrees map[int]string
+}
+
+// issueWorktreesScanMsg carries the result of scanning existing issue worktrees.
+type issueWorktreesScanMsg struct {
+	worktrees map[int]string
+}
+
+// trackedPRsLoadedMsg carries the fetched tracked PRs.
+type trackedPRsLoadedMsg struct {
+	prs []gh.PR
+}
+
+// trackedIssuesLoadedMsg carries the fetched tracked issues.
+type trackedIssuesLoadedMsg struct {
+	issues []gh.Issue
+}
+
+// reviewsLoadedMsg carries persisted review results loaded from disk.
+type reviewsLoadedMsg struct {
+	reviews map[int]claude.ReviewResult
+}
+
+// browserErrorMsg is sent when opening a URL in the browser fails.
+type browserErrorMsg struct {
+	err error
+}
+
+// trackedRemoveErrorMsg is sent when removing a tracked PR or issue fails.
+type trackedRemoveErrorMsg struct {
+	err error
+}
+
 // commentsLoadedMsg is sent when PR comments have been fetched.
 type commentsLoadedMsg struct {
 	prNumber int

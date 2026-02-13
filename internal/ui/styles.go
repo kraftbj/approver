@@ -35,6 +35,10 @@ var (
 			Foreground(ColorRed).
 			Bold(true)
 
+	InfoStyle = lipgloss.NewStyle().
+			Foreground(ColorGreen).
+			Bold(true)
+
 	TitleStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(ColorWhite)

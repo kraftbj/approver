@@ -1,11 +1,21 @@
+# Binary
 approver
 *.exe
 *.dll
 *.so
 *.dylib
+
+# Test artifacts
 *.test
 *.out
-.DS_Store
 
-# Override global gitignore to track agent-os in this repo
-!agent-os/
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor/IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

@@ -20,7 +20,6 @@ type PR struct {
 	Author         Author         `json:"author"`
 	HeadRefName    string         `json:"headRefName"`
 	BaseRefName    string         `json:"baseRefName"`
-	Mergeable      string         `json:"mergeable"`
 	URL            string         `json:"url"`
 	ReviewDecision string         `json:"reviewDecision"`
 	StatusChecks   StatusChecks   `json:"statusCheckRollup"`
@@ -32,6 +31,9 @@ type PR struct {
 	// Review data
 	ReviewRequests []ReviewRequest `json:"reviewRequests"`
 	LatestReviews  []Review        `json:"latestReviews"`
+
+	// Comments from the PR, used to populate CommentCount.
+	Comments []Comment `json:"comments"`
 
 	// Source indicates how this PR was added to the list.
 	// "review-requested" for auto-fetched, "manual" for user-added.
@@ -289,8 +291,6 @@ type Issue struct {
 	// HasTmux is set at runtime when a tmux Claude session exists.
 	HasTmux bool `json:"-"`
 
-	// IsWorking is set at runtime when an autonomous Claude session is running.
-	IsWorking bool `json:"-"`
 }
 
 // RelativeTime returns a human-readable relative time for an issue.
@@ -314,6 +314,11 @@ func (issue *Issue) AssigneeLogins() []string {
 		logins[i] = a.Login
 	}
 	return logins
+}
+
+// FormatRelativeTime returns a human-readable relative time string.
+func FormatRelativeTime(t time.Time) string {
+	return relativeTime(t)
 }
 
 func relativeTime(t time.Time) string {
