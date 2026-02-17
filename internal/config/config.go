@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -110,4 +111,55 @@ func LoadConfig() *Config {
 	}
 
 	return cfg
+}
+
+// AddRepoSource adds a path-based repo source to the config file.
+// It skips duplicates and validates the path is a git repository.
+func AddRepoSource(repoPath string) error {
+	absPath, err := expandPath(repoPath)
+	if err != nil {
+		return fmt.Errorf("resolving path %q: %w", repoPath, err)
+	}
+
+	if !isGitRepo(absPath) {
+		return fmt.Errorf("%q is not a git repository", absPath)
+	}
+
+	cfgPath, err := configPath()
+	if err != nil {
+		return err
+	}
+
+	// Load existing config (or start fresh).
+	cfg := &Config{}
+	data, err := os.ReadFile(cfgPath)
+	if err == nil {
+		_ = yaml.Unmarshal(data, cfg)
+	}
+
+	// Check for duplicates.
+	for _, src := range cfg.RepoSources {
+		resolved, err := expandPath(src.Path)
+		if err == nil && resolved == absPath {
+			fmt.Printf("Already tracked: %s\n", absPath)
+			return nil
+		}
+	}
+
+	cfg.RepoSources = append(cfg.RepoSources, RepoSource{Path: absPath})
+
+	out, err := yaml.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		return fmt.Errorf("creating config dir: %w", err)
+	}
+	if err := os.WriteFile(cfgPath, out, 0o644); err != nil {
+		return fmt.Errorf("writing config: %w", err)
+	}
+
+	fmt.Printf("Added %s to %s\n", absPath, cfgPath)
+	return nil
 }
