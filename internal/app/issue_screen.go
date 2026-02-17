@@ -104,18 +104,23 @@ func (s *issueScreen) HandleKey(h *home, key string) tea.Cmd {
 
 	case "a":
 		h.state = stateInput
-		h.inputAction = inputAddIssue
-		h.inputPrompt = "Add issue (number or URL): "
+		h.inputAction = inputAddItem
+		h.inputPrompt = "Add PR or issue (number or URL): "
 		h.inputBuffer = ""
 
 	case "d":
 		issue := s.issueList.SelectedIssue()
-		if issue != nil && issue.Source == "manual" {
+		if issue != nil {
+			if issue.Source == "manual" {
+				h.removeIssue(issue.Number)
+				return removeTrackedIssueCmd(issue.Number)
+			}
+			// Auto-fetched: add to exclude list
+			if err := addExcludedIssue(issue.Number, issue.Repo); err != nil {
+				h.showError(fmt.Sprintf("Failed to exclude issue: %v", err))
+				return clearErrorAfter(3 * time.Second)
+			}
 			h.removeIssue(issue.Number)
-			return removeTrackedIssueCmd(issue.Number)
-		} else if issue != nil {
-			h.showError("Can only remove manually-tracked issues")
-			return clearErrorAfter(3 * time.Second)
 		}
 
 	case "c":
@@ -168,6 +173,7 @@ func (s *issueScreen) Hints() []ui.KeyHint {
 		{Key: "c", Desc: "tmux"},
 		{Key: "p", Desc: "open PR"},
 		{Key: "a", Desc: "add"},
+		{Key: "d", Desc: "remove"},
 		{Key: "o", Desc: "open"},
 		{Key: "R", Desc: "refresh"},
 		{Key: "?", Desc: "help"},
@@ -180,7 +186,7 @@ func (s *issueScreen) View(h *home, height int) string {
 		return h.viewLoading(height)
 	}
 	if len(s.issueList.Issues) == 0 {
-		content := ui.DimStyle.Render("\n\n  No assigned issues.\n\n  Press R to refresh, a to add an issue manually.")
+		content := ui.DimStyle.Render("\n\n  No issues found.\n\n  Press R to refresh, a to add a PR or issue.")
 		return lipgloss.NewStyle().Width(h.width).Height(height).Render(content)
 	}
 	return s.viewDashboard(h, height)
@@ -317,6 +323,11 @@ func fetchTrackedIssuesCmd(repos []config.RepoEntry) tea.Cmd {
 			}
 			issue, err := gh.FetchIssue(fetchDir, fmt.Sprintf("%d", t.Number))
 			if err != nil {
+				continue
+			}
+			// Drop closed tracked issues
+			if issue.State == "CLOSED" {
+				_ = removeTrackedIssue(t.Number)
 				continue
 			}
 			issue.Source = "manual"

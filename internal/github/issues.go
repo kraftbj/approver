@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strconv"
+	"strings"
 )
 
 // ghIssueFields is the set of fields we request from gh issue list/view.
@@ -16,7 +17,7 @@ func FetchIssues(repoDir string, limit int) ([]Issue, error) {
 		limit = 50
 	}
 	cmd := exec.Command("gh", "issue", "list",
-		"--assignee", "@me",
+		"--search", "assignee:@me OR author:@me",
 		"--json", ghIssueFields,
 		"--limit", strconv.Itoa(limit),
 	)
@@ -38,7 +39,7 @@ func FetchIssues(repoDir string, limit int) ([]Issue, error) {
 	}
 
 	for i := range issues {
-		issues[i].Source = "assigned"
+		issues[i].Source = "auto"
 	}
 
 	return issues, nil
@@ -46,7 +47,8 @@ func FetchIssues(repoDir string, limit int) ([]Issue, error) {
 
 // FetchIssue fetches a single issue by number or URL.
 func FetchIssue(repoDir string, numberOrURL string) (*Issue, error) {
-	cmd := exec.Command("gh", "issue", "view", "--", numberOrURL,
+	numberOrURL = strings.TrimSpace(numberOrURL)
+	cmd := exec.Command("gh", "issue", "view", numberOrURL,
 		"--json", ghIssueFields,
 	)
 	if repoDir != "" {

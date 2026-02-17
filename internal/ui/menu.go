@@ -28,9 +28,9 @@ func (m *Menu) SetWidth(w int) {
 }
 
 // screenNames maps screen index to display name.
-var screenNames = []string{"Reviews", "Issues", "Watchlist"}
+var screenNames = []string{"PRs", "Issues"}
 
-// ScreenIndicator renders the screen switcher like "[1:Reviews] 2:Issues 3:Watchlist".
+// ScreenIndicator renders the screen switcher like "[1:PRs] 2:Issues".
 func ScreenIndicator(activeIdx int) string {
 	activeStyle := lipgloss.NewStyle().Foreground(ColorWhite).Bold(true)
 	inactiveStyle := lipgloss.NewStyle().Foreground(ColorDimGray)

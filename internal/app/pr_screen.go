@@ -232,6 +232,27 @@ func (s *prScreen) HandleKey(h *home, key string) tea.Cmd {
 			h.confirmMsg = fmt.Sprintf("Approve PR #%d? (y/n)", pr.Number)
 		}
 
+	case "a":
+		h.state = stateInput
+		h.inputAction = inputAddItem
+		h.inputPrompt = "Add PR or issue (number or URL): "
+		h.inputBuffer = ""
+
+	case "d":
+		pr := s.prList.SelectedPR()
+		if pr != nil {
+			if pr.Source == "manual" {
+				h.removePR(pr.Number)
+				return removeTrackedPRCmd(pr.Number)
+			}
+			// Auto-fetched: add to exclude list
+			if err := addExcludedPR(pr.Number, pr.Repo); err != nil {
+				h.showError(fmt.Sprintf("Failed to exclude PR: %v", err))
+				return clearErrorAfter(3 * time.Second)
+			}
+			h.removePR(pr.Number)
+		}
+
 	case "?":
 		h.state = stateHelp
 	}
@@ -247,6 +268,8 @@ func (s *prScreen) Hints() []ui.KeyHint {
 		{Key: "F", Desc: "fix"},
 		{Key: "t", Desc: "tmux"},
 		{Key: "A", Desc: "approve"},
+		{Key: "a", Desc: "add"},
+		{Key: "d", Desc: "remove"},
 		{Key: "o", Desc: "open"},
 		{Key: "R", Desc: "refresh"},
 		{Key: "?", Desc: "help"},

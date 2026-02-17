@@ -18,7 +18,7 @@ func (h *home) viewLoading(height int) string {
 }
 
 func (h *home) viewEmpty(height int) string {
-	content := ui.DimStyle.Render("\n\n  No PRs requesting your review.\n\n  Press R to refresh.")
+	content := ui.DimStyle.Render("\n\n  No PRs found.\n\n  Press R to refresh, a to add a PR or issue.")
 	return lipgloss.NewStyle().Width(h.width).Height(height).Render(content)
 }
 
@@ -27,15 +27,14 @@ func (h *home) viewHelp(height int) string {
   Approver - GitHub AI Workflow Hub
 
   Screens:
-    1              Reviews (PRs requesting your review)
-    2              Issues (assigned issues)
-    3              Watchlist (tracked PRs)
+    1              PRs (review-requested + authored + assigned)
+    2              Issues (assigned + authored)
 
   Navigation:
     j/k, up/down   Navigate list
     Tab            Cycle detail panel view
 
-  Reviews:
+  PRs:
     w              Create worktree for selected PR
     W              Delete worktree (with confirmation)
     c              Start/cancel Claude review (auto-creates worktree)
@@ -50,10 +49,10 @@ func (h *home) viewHelp(height int) string {
     W              Delete worktree (with confirmation)
     c              Start Claude tmux session (auto-creates worktree)
     p              Open linked PR in browser
-    a              Add issue by number or URL
-    d              Remove manually-tracked issue
 
   Common:
+    a              Add PR or issue (auto-detects)
+    d              Remove item from list
     o              Open in browser
     R              Refresh
     ?              Show this help
@@ -118,9 +117,6 @@ func (h *home) layoutPanels() {
 	h.issues.issueList.SetSize(listWidth, panelHeight)
 	h.issues.detail.SetSize(detailWidth, panelHeight)
 
-	h.watchlist.prList.SetSize(listWidth, panelHeight)
-	h.watchlist.detail.SetSize(detailWidth, panelHeight)
-
 	h.menu.SetWidth(h.width)
 	h.errBox.SetWidth(h.width)
 }
@@ -181,63 +177,6 @@ func (h *home) removeIssue(number int) {
 			return
 		}
 	}
-}
-
-func (h *home) addWatchlistPR(pr gh.PR) {
-	for i, existing := range h.watchlist.prList.PRs {
-		if existing.Number == pr.Number && existing.Repo == pr.Repo {
-			h.watchlist.prList.PRs[i] = pr
-			return
-		}
-	}
-	h.watchlist.prList.PRs = append(h.watchlist.prList.PRs, pr)
-}
-
-func (h *home) removeWatchlistPR(number int) {
-	for i, pr := range h.watchlist.prList.PRs {
-		if pr.Number == number {
-			h.watchlist.prList.PRs = append(h.watchlist.prList.PRs[:i], h.watchlist.prList.PRs[i+1:]...)
-			if h.watchlist.prList.Selected >= len(h.watchlist.prList.PRs) {
-				h.watchlist.prList.Selected = max(0, len(h.watchlist.prList.PRs)-1)
-			}
-			return
-		}
-	}
-}
-
-func (h *home) processMergedWatchlistPRs() tea.Cmd {
-	var cmds []tea.Cmd
-	var toRemove []ItemKey
-
-	for _, pr := range h.watchlist.prList.PRs {
-		k := PRKey(&pr)
-		if pr.State != "MERGED" {
-			delete(h.mergedSeen, k)
-			continue
-		}
-		if !h.mergedSeen[k] {
-			h.mergedSeen[k] = true
-			continue
-		}
-		toRemove = append(toRemove, k)
-	}
-
-	for _, k := range toRemove {
-		h.removeWatchlistPR(k.Number)
-		cmds = append(cmds, removeTrackedPRCmd(k.Number))
-
-		if _, exists := h.worktrees[k]; exists {
-			mgr := h.wtManagerForKey(k)
-			cmds = append(cmds, deleteWorktreeCmd(mgr, k))
-		}
-
-		delete(h.mergedSeen, k)
-	}
-
-	if len(cmds) > 0 {
-		return tea.Batch(cmds...)
-	}
-	return nil
 }
 
 func (h *home) startReview(key ItemKey, wtPath, repoDir string) tea.Cmd {

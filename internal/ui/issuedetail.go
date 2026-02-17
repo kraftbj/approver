@@ -57,7 +57,7 @@ func (d *IssueDetail) View(issue *gh.Issue) string {
 
 	// Source indicator
 	if issue.Source == "manual" {
-		sections = append(sections, ManualBadgeStyle.Render("  [manually tracked]"))
+		sections = append(sections, ManualBadgeStyle.Render("  [added]"))
 		sections = append(sections, "")
 	}
 

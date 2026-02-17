@@ -17,11 +17,6 @@ type issueWorktreesScanMsg struct {
 	worktrees map[ItemKey]string
 }
 
-// trackedPRsLoadedMsg carries the fetched tracked PRs.
-type trackedPRsLoadedMsg struct {
-	prs []gh.PR
-}
-
 // trackedIssuesLoadedMsg carries the fetched tracked issues.
 type trackedIssuesLoadedMsg struct {
 	issues []gh.Issue
@@ -225,25 +220,14 @@ type issueWorktreeErrorMsg struct {
 	err error
 }
 
-// Watchlist screen messages
-
-// watchlistLoadedMsg is sent when watchlist PRs have been fetched.
-type watchlistLoadedMsg struct {
-	prs []gh.PR
+// itemDetectedMsg is sent when auto-detect resolves a PR or issue from user input.
+type itemDetectedMsg struct {
+	pr    *gh.PR
+	issue *gh.Issue
 }
 
-// watchlistErrorMsg is sent when fetching watchlist PRs fails.
-type watchlistErrorMsg struct {
-	err error
-}
-
-// watchlistPRAddedMsg is sent when a PR is added to the watchlist.
-type watchlistPRAddedMsg struct {
-	pr gh.PR
-}
-
-// watchlistAddErrorMsg is sent when adding a watchlist PR fails.
-type watchlistAddErrorMsg struct {
+// itemDetectErrorMsg is sent when auto-detect fails for both PR and issue.
+type itemDetectErrorMsg struct {
 	err error
 }
 

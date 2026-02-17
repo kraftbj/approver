@@ -139,6 +139,28 @@ func fetchCommentsCmd(repoDir string, key ItemKey) tea.Cmd {
 	}
 }
 
+func detectAndFetchItemCmd(repoDir string, key ItemKey, input string) tea.Cmd {
+	return func() tea.Msg {
+		// Try PR first
+		pr, err := gh.FetchPR(repoDir, input)
+		if err == nil {
+			pr.Source = "manual"
+			pr.Repo = key.Repo
+			pr.RepoDir = repoDir
+			return itemDetectedMsg{pr: pr}
+		}
+		// Try issue
+		issue, err2 := gh.FetchIssue(repoDir, input)
+		if err2 == nil {
+			issue.Source = "manual"
+			issue.Repo = key.Repo
+			issue.RepoDir = repoDir
+			return itemDetectedMsg{issue: issue}
+		}
+		return itemDetectErrorMsg{err: fmt.Errorf("not found as PR or issue: %v", err)}
+	}
+}
+
 func removeTrackedPRCmd(prNumber int) tea.Cmd {
 	return func() tea.Msg {
 		if err := removeTrackedPR(prNumber); err != nil {

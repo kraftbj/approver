@@ -19,7 +19,7 @@ func FetchPRs(repoDir string, limit int) ([]PR, error) {
 		limit = 50
 	}
 	cmd := exec.Command("gh", "pr", "list",
-		"--search", "review-requested:@me",
+		"--search", "review-requested:@me OR author:@me OR assignee:@me",
 		"--json", ghPRFields,
 		"--limit", strconv.Itoa(limit),
 	)
@@ -41,7 +41,7 @@ func FetchPRs(repoDir string, limit int) ([]PR, error) {
 	}
 
 	for i := range prs {
-		prs[i].Source = "review-requested"
+		prs[i].Source = "auto"
 		prs[i].CommentCount = len(prs[i].Comments)
 	}
 

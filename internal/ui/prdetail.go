@@ -134,7 +134,7 @@ func (d *PRDetail) View(pr *gh.PR) string {
 
 	// Source indicator
 	if pr.Source == "manual" {
-		sections = append(sections, ManualBadgeStyle.Render("  [manually tracked]"))
+		sections = append(sections, ManualBadgeStyle.Render("  [added]"))
 		sections = append(sections, "")
 	}
 

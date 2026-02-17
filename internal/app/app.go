@@ -58,7 +58,7 @@ const (
 	inputAddPR          inputAction = iota // Adding a PR by number/URL
 	inputRequestChanges                    // Entering reason for request-changes
 	inputAddIssue                          // Adding an issue by number/URL
-	inputAddWatchlistPR                    // Adding a PR to the watchlist
+	inputAddItem                           // Auto-detect PR vs issue
 )
 
 // prSnapshot captures PR state for change detection between polls.
@@ -83,10 +83,9 @@ type home struct {
 	state  state
 
 	// Screen management
-	active    activeScreen
-	pr        prScreen
-	issues    issueScreen
-	watchlist watchlistScreen
+	active activeScreen
+	pr     prScreen
+	issues issueScreen
 
 	// UI components
 	menu    ui.Menu
@@ -144,11 +143,6 @@ type home struct {
 	pendingIssue    pendingIssueAction
 	pendingIssueKey ItemKey
 
-	// Watchlist AI summaries
-	watchlistSummaries map[ItemKey]string
-
-	// Merged PR tracking for auto-removal
-	mergedSeen map[ItemKey]bool
 
 	// Fix agent state
 	fixItems    []claude.FixItem              // Available findings for selection
@@ -173,7 +167,6 @@ func newHome() home {
 		active:                 screenReviews,
 		pr:                     newPRScreen(),
 		issues:                 newIssueScreen(),
-		watchlist:              newWatchlistScreen(),
 		menu:                   ui.NewMenu(),
 		errBox:                 ui.NewErrBox(),
 		spinner:                s,
@@ -190,8 +183,6 @@ func newHome() home {
 		issueWorktrees:         make(map[ItemKey]string),
 		creatingIssueWorktrees: make(map[ItemKey]bool),
 		issueTmuxSessions:      make(map[ItemKey]*claude.TmuxSession),
-		watchlistSummaries:     make(map[ItemKey]string),
-		mergedSeen:             make(map[ItemKey]bool),
 		fixing:                 make(map[ItemKey]context.CancelFunc),
 		fixStep:                make(map[ItemKey]string),
 		fixResults:             make(map[ItemKey]string),
@@ -214,7 +205,9 @@ func (h home) Init() tea.Cmd {
 		}
 	}
 
-	cmds = append(cmds, fetchWatchlistCmd(h.repos))
+	// Background weekly cleanup of exclude lists
+	cmds = append(cmds, runExcludeCleanupCmd(h.repoDir))
+
 	return tea.Batch(cmds...)
 }
 
@@ -239,22 +232,21 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case prsLoadedMsg:
 		h.loading = false
 		h.state = stateDefault
-		h.pr.prList.SetPRs(msg.prs)
+		h.pr.prList.SetPRs(filterExcludedPRs(msg.prs))
 		h.reconcileWorktrees()
 		h.takeSnapshots()
+		// Fetch tracked PRs to merge into the list
+		cmds = append(cmds, fetchTrackedPRsCmd(h.repos))
 		// Schedule background polling
 		if h.cfg != nil && *h.cfg.PollInterval > 0 {
 			cmds = append(cmds, pollTick(*h.cfg.PollInterval))
 		}
 
 	case trackedPRsLoadedMsg:
-		// Tracked PRs go to the watchlist screen, not reviews
-		h.watchlist.loaded = true
-		if h.active == screenWatchlist && h.loading {
-			h.loading = false
-			h.state = stateDefault
+		for _, pr := range msg.prs {
+			h.addPRToList(pr)
 		}
-		h.watchlist.prList.SetPRs(msg.prs)
+		h.reconcileWorktrees()
 
 	case prsErrorMsg:
 		h.loading = false
@@ -491,7 +483,7 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.loading = false
 			h.state = stateDefault
 		}
-		for _, issue := range msg.issues {
+		for _, issue := range filterExcludedIssues(msg.issues) {
 			h.addIssueToList(issue)
 		}
 		h.reconcileIssueWorktrees()
@@ -562,41 +554,45 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		h.reconcileIssueWorktrees()
 
-	// Watchlist screen messages
-
-	case watchlistLoadedMsg:
-		h.watchlist.loaded = true
-		if h.active == screenWatchlist && h.loading {
-			h.loading = false
-			h.state = stateDefault
-		}
-		h.watchlist.prList.SetPRs(msg.prs)
-		if cmd := h.processMergedWatchlistPRs(); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-
-	case watchlistErrorMsg:
-		if h.active == screenWatchlist && h.loading {
-			h.loading = false
-			h.state = stateDefault
-		}
-		h.showError(fmt.Sprintf("Failed to fetch watchlist: %v", msg.err))
-		cmds = append(cmds, clearErrorAfter(3*time.Second))
-
-	case watchlistPRAddedMsg:
-		h.addWatchlistPR(msg.pr)
+	case itemDetectedMsg:
 		h.state = stateDefault
 		h.inputBuffer = ""
-		if err := addTrackedPR(msg.pr.Number); err != nil {
-			h.showError(fmt.Sprintf("Failed to save tracked PR: %v", err))
-			cmds = append(cmds, clearErrorAfter(3*time.Second))
+		if msg.pr != nil {
+			h.addPRToList(*msg.pr)
+			h.active = screenReviews
+			for i, p := range h.pr.prList.PRs {
+				if p.Number == msg.pr.Number && p.Repo == msg.pr.Repo {
+					h.pr.prList.Selected = i
+					break
+				}
+			}
+			if err := addTrackedPR(msg.pr.Number); err != nil {
+				h.showError(fmt.Sprintf("Failed to save tracked PR: %v", err))
+				cmds = append(cmds, clearErrorAfter(3*time.Second))
+			}
+		} else if msg.issue != nil {
+			h.addIssueToList(*msg.issue)
+			h.active = screenIssues
+			for i, iss := range h.issues.issueList.Issues {
+				if iss.Number == msg.issue.Number && iss.Repo == msg.issue.Repo {
+					h.issues.issueList.Selected = i
+					break
+				}
+			}
+			if err := addTrackedIssue(msg.issue.Number); err != nil {
+				h.showError(fmt.Sprintf("Failed to save tracked issue: %v", err))
+				cmds = append(cmds, clearErrorAfter(3*time.Second))
+			}
 		}
 
-	case watchlistAddErrorMsg:
+	case itemDetectErrorMsg:
 		h.state = stateDefault
 		h.inputBuffer = ""
-		h.showError(fmt.Sprintf("Failed to add PR to watchlist: %v", msg.err))
+		h.showError(fmt.Sprintf("Failed to add item: %v", msg.err))
 		cmds = append(cmds, clearErrorAfter(3*time.Second))
+
+	case cleanupDoneMsg:
+		// Weekly cleanup completed, nothing to do
 
 	case browserErrorMsg:
 		h.showError(fmt.Sprintf("Failed to open browser: %v", msg.err))
@@ -657,9 +653,6 @@ func (h *home) handleDefaultKey(key string) tea.Cmd {
 	case "2":
 		h.active = screenIssues
 		return nil
-	case "3":
-		h.active = screenWatchlist
-		return nil
 	}
 
 	// Dispatch to active screen
@@ -668,8 +661,6 @@ func (h *home) handleDefaultKey(key string) tea.Cmd {
 		return h.pr.HandleKey(h, key)
 	case screenIssues:
 		return h.issues.HandleKey(h, key)
-	case screenWatchlist:
-		return h.watchlist.HandleKey(h, key)
 	}
 	return nil
 }
@@ -766,9 +757,9 @@ func (h *home) handleInputKey(msg tea.KeyMsg) tea.Cmd {
 			case inputAddIssue:
 				h.state = stateDefault
 				return fetchSingleIssueCmd(defaultDir, defaultKey, input)
-			case inputAddWatchlistPR:
+			case inputAddItem:
 				h.state = stateDefault
-				return fetchSingleWatchlistPRCmd(defaultDir, defaultKey, input)
+				return detectAndFetchItemCmd(defaultDir, defaultKey, input)
 			default:
 				return fetchSinglePRCmd(defaultDir, defaultKey, input)
 			}
@@ -808,8 +799,6 @@ func (h home) View() string {
 		mainContent = h.pr.View(&h, panelHeight)
 	case screenIssues:
 		mainContent = h.issues.View(&h, panelHeight)
-	case screenWatchlist:
-		mainContent = h.watchlist.View(&h, panelHeight)
 	}
 
 	// Overlay handling
@@ -839,8 +828,6 @@ func (h home) View() string {
 			hints = h.pr.Hints()
 		case screenIssues:
 			hints = h.issues.Hints()
-		case screenWatchlist:
-			hints = h.watchlist.Hints()
 		default:
 			hints = ui.DefaultHints()
 		}

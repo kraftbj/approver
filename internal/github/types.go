@@ -43,7 +43,7 @@ type PR struct {
 	RepoDir string `json:"-"`
 
 	// Source indicates how this PR was added to the list.
-	// "review-requested" for auto-fetched, "manual" for user-added.
+	// "auto" for auto-fetched, "manual" for user-added.
 	Source string `json:"-"`
 
 	// HasWorktree is set at runtime by reconciling with worktree state.
@@ -292,7 +292,7 @@ type Issue struct {
 	RepoDir string `json:"-"`
 
 	// Source indicates how this issue was added.
-	// "assigned" for auto-fetched, "manual" for user-added.
+	// "auto" for auto-fetched, "manual" for user-added.
 	Source string `json:"-"`
 
 	// HasWorktree is set at runtime by reconciling with worktree state.

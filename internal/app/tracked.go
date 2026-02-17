@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/kraft/approver/internal/config"
 	gh "github.com/kraft/approver/internal/github"
 )
 
@@ -98,26 +99,55 @@ func removeTrackedPR(prNumber int) error {
 	return nil
 }
 
-// fetchTrackedPRsCmd fetches all tracked PRs and merges them with the main list.
-func fetchTrackedPRsCmd(repoDir string) tea.Cmd {
+// trackedPRsLoadedMsg carries the fetched tracked PRs to merge into the main list.
+type trackedPRsLoadedMsg struct {
+	prs []gh.PR
+}
+
+// fetchTrackedPRsCmd fetches all tracked PRs and merges them with the main PR list.
+func fetchTrackedPRsCmd(repos []config.RepoEntry) tea.Cmd {
 	return func() tea.Msg {
 		tracked, err := loadTrackedPRs()
 		if err != nil {
 			return prsErrorMsg{err: fmt.Errorf("loading tracked PRs: %w", err)}
 		}
 
-		var trackedPRs []gh.PR
+		repoDir := ""
+		repoName := ""
+		if len(repos) > 0 {
+			repoDir = repos[0].Dir
+			repoName = repos[0].Name
+		}
+
+		var prs []gh.PR
 		for _, t := range tracked {
-			pr, err := gh.FetchPR(repoDir, fmt.Sprintf("%d", t.Number))
+			fetchDir := repoDir
+			fetchName := repoName
+			if t.Repo != "" {
+				for _, r := range repos {
+					if r.Name == t.Repo {
+						fetchDir = r.Dir
+						fetchName = r.Name
+						break
+					}
+				}
+			}
+			pr, err := gh.FetchPR(fetchDir, fmt.Sprintf("%d", t.Number))
 			if err != nil {
-				// Skip PRs that can't be fetched (deleted, etc.)
+				continue
+			}
+			// Drop closed/merged tracked PRs
+			if pr.State == "CLOSED" || pr.State == "MERGED" {
+				_ = removeTrackedPR(t.Number)
 				continue
 			}
 			pr.Source = "manual"
-			trackedPRs = append(trackedPRs, *pr)
+			pr.Repo = fetchName
+			pr.RepoDir = fetchDir
+			prs = append(prs, *pr)
 		}
 
-		return trackedPRsLoadedMsg{prs: trackedPRs}
+		return trackedPRsLoadedMsg{prs: prs}
 	}
 }
 
