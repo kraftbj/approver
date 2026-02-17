@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -14,7 +15,7 @@ type PRList struct {
 	Selected int
 	Width    int
 	Height   int
-	Offset   int // scroll offset
+	Offset   int // scroll offset (in PR indices)
 }
 
 func NewPRList() PRList {
@@ -63,6 +64,34 @@ func (l *PRList) SelectedPR() *gh.PR {
 // linesPerItem is the number of display lines per PR entry.
 const linesPerItem = 2
 
+// multiRepo returns true if the list contains PRs from more than one repo.
+func (l *PRList) multiRepo() bool {
+	if len(l.PRs) <= 1 {
+		return false
+	}
+	first := l.PRs[0].Repo
+	for _, pr := range l.PRs[1:] {
+		if pr.Repo != first {
+			return true
+		}
+	}
+	return false
+}
+
+// repoGroups returns PRs grouped by repo, sorted alphabetically by repo name.
+func (l *PRList) repoGroups() []string {
+	seen := map[string]bool{}
+	var repos []string
+	for _, pr := range l.PRs {
+		if !seen[pr.Repo] {
+			seen[pr.Repo] = true
+			repos = append(repos, pr.Repo)
+		}
+	}
+	sort.Strings(repos)
+	return repos
+}
+
 // clampScroll ensures the selected item is visible.
 func (l *PRList) clampScroll() {
 	if l.Height <= 0 {
@@ -93,6 +122,16 @@ func (l *PRList) View() string {
 		contentWidth = 10
 	}
 
+	multi := l.multiRepo()
+
+	if !multi {
+		return l.viewFlat(contentWidth)
+	}
+	return l.viewGrouped(contentWidth)
+}
+
+// viewFlat renders the list without repo headers (single-repo mode).
+func (l *PRList) viewFlat(contentWidth int) string {
 	visibleItems := l.Height / linesPerItem
 	if visibleItems < 1 {
 		visibleItems = 1
@@ -106,6 +145,87 @@ func (l *PRList) View() string {
 
 		line1, line2 := l.renderPRItem(pr, isSelected, contentWidth)
 		lines = append(lines, line1, line2)
+	}
+
+	content := strings.Join(lines, "\n")
+	return ListPanelStyle.Width(l.Width).Height(l.Height).Render(content)
+}
+
+// viewGrouped renders the list with repo headers (multi-repo mode).
+func (l *PRList) viewGrouped(contentWidth int) string {
+	repos := l.repoGroups()
+
+	// Build ordered list of (repoName, prIndex) pairs
+	type displayRow struct {
+		isHeader bool
+		repo     string
+		prIdx    int
+	}
+	var rows []displayRow
+	for _, repo := range repos {
+		rows = append(rows, displayRow{isHeader: true, repo: repo})
+		for i, pr := range l.PRs {
+			if pr.Repo == repo {
+				rows = append(rows, displayRow{prIdx: i})
+			}
+		}
+	}
+
+	// Find the row index of the selected PR
+	selectedRow := 0
+	for ri, row := range rows {
+		if !row.isHeader && row.prIdx == l.Selected {
+			selectedRow = ri
+			break
+		}
+	}
+
+	// Compute visible window in display lines
+	availLines := l.Height
+	var lines []string
+
+	// Scroll: start from a row such that the selected row is visible.
+	// Walk backward from selectedRow to find a good start position.
+	startRow := 0
+	if len(rows) > 0 {
+		// Calculate total lines from startRow to selectedRow
+		startRow = selectedRow
+		usedLines := linesPerItem // the selected item itself
+		for startRow > 0 {
+			prev := startRow - 1
+			prevLines := linesPerItem
+			if rows[prev].isHeader {
+				prevLines = 1
+			}
+			if usedLines+prevLines > availLines {
+				break
+			}
+			usedLines += prevLines
+			startRow = prev
+		}
+	}
+
+	usedLines := 0
+	for ri := startRow; ri < len(rows) && usedLines < availLines; ri++ {
+		row := rows[ri]
+		if row.isHeader {
+			if usedLines+1 > availLines {
+				break
+			}
+			header := RepoHeaderStyle.Render(fmt.Sprintf("  %s", row.repo))
+			headerLine := lipgloss.NewStyle().Width(contentWidth).Render(header)
+			lines = append(lines, headerLine)
+			usedLines++
+		} else {
+			if usedLines+linesPerItem > availLines {
+				break
+			}
+			pr := l.PRs[row.prIdx]
+			isSelected := row.prIdx == l.Selected
+			line1, line2 := l.renderPRItem(pr, isSelected, contentWidth)
+			lines = append(lines, line1, line2)
+			usedLines += linesPerItem
+		}
 	}
 
 	content := strings.Join(lines, "\n")
@@ -138,6 +258,9 @@ func (l *PRList) renderPRItem(pr gh.PR, selected bool, width int) (string, strin
 	}
 	if pr.IsCreatingWorktree {
 		prefix += CIStyle("pending").Render("W")
+	}
+	if pr.State == "MERGED" {
+		prefix += MergedBadgeStyle.Render("M")
 	}
 
 	numberStr := fmt.Sprintf("#%d", pr.Number)

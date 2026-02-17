@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -102,61 +103,61 @@ type home struct {
 	inputPrompt string
 	inputAction inputAction
 
-	// Working directory (git repo)
-	repoDir string
+	// Repository configuration
+	repoDir    string               // Primary repo (CWD fallback for single-repo mode)
+	repos      []config.RepoEntry   // All configured repositories
+	wtManagers map[string]*worktree.Manager // Per-repo worktree managers (keyed by repo name)
 
-	// Worktree state (pr number -> path)
-	worktrees map[int]string
-
-	// Worktree manager
-	wtManager *worktree.Manager
+	// Worktree state
+	worktrees         map[ItemKey]string
+	creatingWorktrees map[ItemKey]bool
 
 	// Claude review state
-	reviews    map[int]claude.ReviewResult
-	reviewing  map[int]context.CancelFunc
-	reviewStep map[int]string
+	reviews    map[ItemKey]claude.ReviewResult
+	reviewing  map[ItemKey]context.CancelFunc
+	reviewStep map[ItemKey]string
 
-	// PR comments cache (pr number -> comments)
-	comments map[int][]gh.Comment
+	// PR comments cache
+	comments map[ItemKey][]gh.Comment
 
 	// Notification snapshots for detecting PR state changes
-	prSnapshots map[int]prSnapshot
+	prSnapshots map[ItemKey]prSnapshot
 
 	// tmux session state
-	tmuxSessions map[int]*claude.TmuxSession
-
-	// Worktree creation in-progress tracking
-	creatingWorktrees map[int]bool
+	tmuxSessions map[ItemKey]*claude.TmuxSession
 
 	// Pending action (deferred until worktree creation completes)
-	pending   pendingAction
-	pendingPR int
+	pending    pendingAction
+	pendingKey ItemKey
 
 	// Fun review spinner rotation
 	reviewMsgIdx int
 
-	// Issue worktree state (issue number -> path)
-	issueWorktrees         map[int]string
-	creatingIssueWorktrees map[int]bool
+	// Issue worktree state
+	issueWorktrees         map[ItemKey]string
+	creatingIssueWorktrees map[ItemKey]bool
 
 	// Issue tmux sessions
-	issueTmuxSessions map[int]*claude.TmuxSession
+	issueTmuxSessions map[ItemKey]*claude.TmuxSession
 
 	// Issue pending action
 	pendingIssue    pendingIssueAction
-	pendingIssueNum int
+	pendingIssueKey ItemKey
 
-	// Watchlist AI summaries (pr number -> summary text)
-	watchlistSummaries map[int]string
+	// Watchlist AI summaries
+	watchlistSummaries map[ItemKey]string
+
+	// Merged PR tracking for auto-removal
+	mergedSeen map[ItemKey]bool
 
 	// Fix agent state
-	fixItems    []claude.FixItem           // Available findings for selection
-	fixSelected []bool                     // Toggle state per item
-	fixCursor   int                        // Cursor position in selection list
-	fixing      map[int]context.CancelFunc // Fix agent in progress (pr number -> cancel)
-	fixStep     map[int]string             // Current fix step text
-	fixResults  map[int]string             // Fix agent output (pr number -> output)
-	fixMsgIdx   int                        // Fun fix spinner rotation
+	fixItems    []claude.FixItem              // Available findings for selection
+	fixSelected []bool                        // Toggle state per item
+	fixCursor   int                           // Cursor position in selection list
+	fixing      map[ItemKey]context.CancelFunc // Fix agent in progress
+	fixStep     map[ItemKey]string             // Current fix step text
+	fixResults  map[ItemKey]string             // Fix agent output
+	fixMsgIdx   int                           // Fun fix spinner rotation
 
 	// Config
 	cfg *config.Config
@@ -177,34 +178,44 @@ func newHome() home {
 		errBox:                 ui.NewErrBox(),
 		spinner:                s,
 		loading:                true,
-		worktrees:              make(map[int]string),
-		reviews:                make(map[int]claude.ReviewResult),
-		reviewing:              make(map[int]context.CancelFunc),
-		reviewStep:             make(map[int]string),
-		comments:               make(map[int][]gh.Comment),
-		prSnapshots:            make(map[int]prSnapshot),
-		tmuxSessions:           make(map[int]*claude.TmuxSession),
-		creatingWorktrees:      make(map[int]bool),
-		issueWorktrees:         make(map[int]string),
-		creatingIssueWorktrees: make(map[int]bool),
-		issueTmuxSessions:      make(map[int]*claude.TmuxSession),
-		watchlistSummaries:     make(map[int]string),
-		fixing:                 make(map[int]context.CancelFunc),
-		fixStep:                make(map[int]string),
-		fixResults:             make(map[int]string),
+		wtManagers:             make(map[string]*worktree.Manager),
+		worktrees:              make(map[ItemKey]string),
+		creatingWorktrees:      make(map[ItemKey]bool),
+		reviews:                make(map[ItemKey]claude.ReviewResult),
+		reviewing:              make(map[ItemKey]context.CancelFunc),
+		reviewStep:             make(map[ItemKey]string),
+		comments:               make(map[ItemKey][]gh.Comment),
+		prSnapshots:            make(map[ItemKey]prSnapshot),
+		tmuxSessions:           make(map[ItemKey]*claude.TmuxSession),
+		issueWorktrees:         make(map[ItemKey]string),
+		creatingIssueWorktrees: make(map[ItemKey]bool),
+		issueTmuxSessions:      make(map[ItemKey]*claude.TmuxSession),
+		watchlistSummaries:     make(map[ItemKey]string),
+		mergedSeen:             make(map[ItemKey]bool),
+		fixing:                 make(map[ItemKey]context.CancelFunc),
+		fixStep:                make(map[ItemKey]string),
+		fixResults:             make(map[ItemKey]string),
 	}
 }
 
 func (h home) Init() tea.Cmd {
-	return tea.Batch(
-		h.spinner.Tick,
-		fetchPRsCmd(h.repoDir, h.cfg.PRLimit),
-		scanWorktreesCmd(h.wtManager),
-		scanIssueWorktreesCmd(h.wtManager),
-		loadReviewsCmd(),
-		fetchIssuesCmd(h.repoDir, h.cfg.PRLimit),
-		fetchWatchlistCmd(h.repoDir),
-	)
+	var cmds []tea.Cmd
+	cmds = append(cmds, h.spinner.Tick, loadReviewsCmd())
+
+	for _, repo := range h.repos {
+		repoName := repo.Name
+		repoDir := repo.Dir
+		cmds = append(cmds,
+			fetchPRsCmd(repoDir, repoName, h.cfg.PRLimit),
+			fetchIssuesCmd(repoDir, repoName, h.cfg.PRLimit),
+		)
+		if mgr, ok := h.wtManagers[repoName]; ok {
+			cmds = append(cmds, scanWorktreesCmd(mgr, repoName), scanIssueWorktreesCmd(mgr, repoName))
+		}
+	}
+
+	cmds = append(cmds, fetchWatchlistCmd(h.repos))
+	return tea.Batch(cmds...)
 }
 
 func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -255,36 +266,38 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.errBox.Clear()
 
 	case worktreeCreatedMsg:
-		h.worktrees[msg.prNumber] = msg.path
-		delete(h.creatingWorktrees, msg.prNumber)
+		h.worktrees[msg.key] = msg.path
+		delete(h.creatingWorktrees, msg.key)
 		h.reconcileWorktrees()
-		if setupCmd := h.repoSetupCommand(); setupCmd != "" && h.pending != pendingNone && h.pendingPR == msg.prNumber {
-			cmds = append(cmds, runSetupCmd(msg.path, setupCmd, msg.prNumber))
+		if setupCmd := h.repoSetupCommand(); setupCmd != "" && h.pending != pendingNone && h.pendingKey == msg.key {
+			cmds = append(cmds, runSetupCmd(msg.path, setupCmd, msg.key))
 			return h, tea.Batch(cmds...)
 		}
-		if h.pending != pendingNone && h.pendingPR == msg.prNumber {
-			cmd := h.dispatchPending(msg.prNumber, msg.path)
+		if h.pending != pendingNone && h.pendingKey == msg.key {
+			cmd := h.dispatchPending(msg.key, msg.path)
 			if cmd != nil {
 				cmds = append(cmds, cmd)
 			}
 		}
 
 	case worktreeDeletedMsg:
-		delete(h.worktrees, msg.prNumber)
-		if session, ok := h.tmuxSessions[msg.prNumber]; ok {
+		delete(h.worktrees, msg.key)
+		if session, ok := h.tmuxSessions[msg.key]; ok {
 			session.Kill()
-			delete(h.tmuxSessions, msg.prNumber)
+			delete(h.tmuxSessions, msg.key)
 		}
 		h.reconcileWorktrees()
 		h.reconcileClaudeState()
 
 	case worktreesScanMsg:
-		h.worktrees = msg.worktrees
+		for k, v := range msg.worktrees {
+			h.worktrees[k] = v
+		}
 		h.reconcileWorktrees()
 
 	case worktreeErrorMsg:
-		if msg.prNumber != 0 {
-			delete(h.creatingWorktrees, msg.prNumber)
+		if msg.key.Number != 0 {
+			delete(h.creatingWorktrees, msg.key)
 			h.reconcileWorktrees()
 		}
 		h.clearPending()
@@ -307,30 +320,30 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, clearErrorAfter(3*time.Second))
 
 	case reviewsLoadedMsg:
-		for prNumber, review := range msg.reviews {
-			h.reviews[prNumber] = review
+		for key, review := range msg.reviews {
+			h.reviews[key] = review
 		}
 		h.reconcileClaudeState()
 
 	case claudeReviewDoneMsg:
-		h.reviews[msg.prNumber] = msg.review
-		delete(h.reviewing, msg.prNumber)
-		delete(h.reviewStep, msg.prNumber)
+		h.reviews[msg.key] = msg.review
+		delete(h.reviewing, msg.key)
+		delete(h.reviewStep, msg.key)
 		h.reconcileClaudeState()
-		if err := saveReviewResult(msg.prNumber, msg.review); err != nil {
+		if err := saveReviewResult(msg.key, msg.review); err != nil {
 			h.showError(fmt.Sprintf("Failed to save review: %v", err))
 			cmds = append(cmds, clearErrorAfter(3*time.Second))
 		}
 
 	case claudeReviewErrorMsg:
-		delete(h.reviewing, msg.prNumber)
-		delete(h.reviewStep, msg.prNumber)
+		delete(h.reviewing, msg.key)
+		delete(h.reviewStep, msg.key)
 		h.reconcileClaudeState()
-		h.showError(fmt.Sprintf("Review failed for PR #%d: %v", msg.prNumber, msg.err))
+		h.showError(fmt.Sprintf("Review failed for PR #%d: %v", msg.key.Number, msg.err))
 		cmds = append(cmds, clearErrorAfter(5*time.Second))
 
 	case claudeReviewProgressMsg:
-		h.reviewStep[msg.prNumber] = msg.step
+		h.reviewStep[msg.key] = msg.step
 
 	case tmuxSessionErrorMsg:
 		h.showError(fmt.Sprintf("tmux error: %v", msg.err))
@@ -340,89 +353,91 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(h.reviewing) > 0 {
 			h.reviewMsgIdx++
 			msg := funReviewMessages[h.reviewMsgIdx%len(funReviewMessages)]
-			for prNum := range h.reviewing {
-				h.reviewStep[prNum] = msg
+			for k := range h.reviewing {
+				h.reviewStep[k] = msg
 			}
 			cmds = append(cmds, reviewSpinnerTick())
 		}
 
 	case fixDoneMsg:
-		h.fixResults[msg.prNumber] = msg.output
-		delete(h.fixing, msg.prNumber)
-		delete(h.fixStep, msg.prNumber)
+		h.fixResults[msg.key] = msg.output
+		delete(h.fixing, msg.key)
+		delete(h.fixStep, msg.key)
 		h.pr.detailMode = detailFix
 		h.state = stateConfirm
 		h.confirmAction = confirmFixCommitPush
-		h.confirmMsg = fmt.Sprintf("Commit and push fixes for PR #%d? (y/n)", msg.prNumber)
+		h.confirmMsg = fmt.Sprintf("Commit and push fixes for PR #%d? (y/n)", msg.key.Number)
 
 	case fixErrorMsg:
-		delete(h.fixing, msg.prNumber)
-		delete(h.fixStep, msg.prNumber)
-		h.showError(fmt.Sprintf("Fix failed for PR #%d: %v", msg.prNumber, msg.err))
+		delete(h.fixing, msg.key)
+		delete(h.fixStep, msg.key)
+		h.showError(fmt.Sprintf("Fix failed for PR #%d: %v", msg.key.Number, msg.err))
 		cmds = append(cmds, clearErrorAfter(5*time.Second))
 
 	case fixProgressMsg:
-		h.fixStep[msg.prNumber] = msg.step
+		h.fixStep[msg.key] = msg.step
 
 	case fixSpinnerTickMsg:
 		if len(h.fixing) > 0 {
 			h.fixMsgIdx++
 			msg := funFixMessages[h.fixMsgIdx%len(funFixMessages)]
-			for prNum := range h.fixing {
-				h.fixStep[prNum] = msg
+			for k := range h.fixing {
+				h.fixStep[k] = msg
 			}
 			cmds = append(cmds, fixSpinnerTick())
 		}
 
 	case fixCommitPushDoneMsg:
-		h.showInfo(fmt.Sprintf("Fixes committed and pushed for PR #%d", msg.prNumber))
+		h.showInfo(fmt.Sprintf("Fixes committed and pushed for PR #%d", msg.key.Number))
 		cmds = append(cmds, clearErrorAfter(3*time.Second))
 
 	case fixCommitPushErrorMsg:
-		h.showError(fmt.Sprintf("Fix commit/push failed for PR #%d: %v", msg.prNumber, msg.err))
+		h.showError(fmt.Sprintf("Fix commit/push failed for PR #%d: %v", msg.key.Number, msg.err))
 		cmds = append(cmds, clearErrorAfter(5*time.Second))
 
 	case prApprovedMsg:
-		h.showInfo(fmt.Sprintf("PR #%d approved", msg.prNumber))
+		h.showInfo(fmt.Sprintf("PR #%d approved", msg.key.Number))
 		cmds = append(cmds, clearErrorAfter(3*time.Second))
 		// Optimistic update — show APPROVED immediately
 		for i, pr := range h.pr.prList.PRs {
-			if pr.Number == msg.prNumber {
+			if pr.Number == msg.key.Number && pr.Repo == msg.key.Repo {
 				h.pr.prList.PRs[i].ReviewDecision = "APPROVED"
 				break
 			}
 		}
-		cmds = append(cmds, fetchSinglePRCmd(h.repoDir, fmt.Sprintf("%d", msg.prNumber)))
+		cmds = append(cmds, fetchSinglePRCmd(h.repoDirForKey(msg.key), msg.key, fmt.Sprintf("%d", msg.key.Number)))
 
 	case prApproveErrorMsg:
-		h.showError(fmt.Sprintf("Failed to approve PR #%d: %v", msg.prNumber, msg.err))
+		h.showError(fmt.Sprintf("Failed to approve PR #%d: %v", msg.key.Number, msg.err))
 		cmds = append(cmds, clearErrorAfter(5*time.Second))
 
 	case branchUpdatedMsg:
-		h.showInfo(fmt.Sprintf("Branch updated for PR #%d", msg.prNumber))
+		h.showInfo(fmt.Sprintf("Branch updated for PR #%d", msg.key.Number))
 		cmds = append(cmds, clearErrorAfter(3*time.Second))
 		pr := h.pr.prList.SelectedPR()
-		if pr != nil && pr.Number == msg.prNumber {
+		if pr != nil && PRKey(pr) == msg.key {
 			h.state = stateConfirm
 			h.confirmAction = confirmPushBranch
 			h.confirmMsg = fmt.Sprintf("Push to origin? (y/n)")
 		}
 
 	case branchUpdateErrorMsg:
-		h.showError(fmt.Sprintf("Failed to update branch for PR #%d: %v", msg.prNumber, msg.err))
+		h.showError(fmt.Sprintf("Failed to update branch for PR #%d: %v", msg.key.Number, msg.err))
 		cmds = append(cmds, clearErrorAfter(5*time.Second))
 
 	case branchPushedMsg:
-		h.showInfo(fmt.Sprintf("Branch pushed for PR #%d", msg.prNumber))
+		h.showInfo(fmt.Sprintf("Branch pushed for PR #%d", msg.key.Number))
 		cmds = append(cmds, clearErrorAfter(3*time.Second))
 
 	case branchPushErrorMsg:
-		h.showError(fmt.Sprintf("Failed to push branch for PR #%d: %v", msg.prNumber, msg.err))
+		h.showError(fmt.Sprintf("Failed to push branch for PR #%d: %v", msg.key.Number, msg.err))
 		cmds = append(cmds, clearErrorAfter(5*time.Second))
 
 	case pollTickMsg:
 		if !h.loading {
-			cmds = append(cmds, pollPRsCmd(h.repoDir, h.cfg.PRLimit))
+			for _, repo := range h.repos {
+				cmds = append(cmds, pollPRsCmd(repo.Dir, repo.Name, h.cfg.PRLimit))
+			}
 		} else if h.cfg != nil && *h.cfg.PollInterval > 0 {
 			cmds = append(cmds, pollTick(*h.cfg.PollInterval))
 		}
@@ -440,24 +455,24 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case prChangesRequestedMsg:
-		h.showInfo(fmt.Sprintf("Changes requested on PR #%d", msg.prNumber))
+		h.showInfo(fmt.Sprintf("Changes requested on PR #%d", msg.key.Number))
 		cmds = append(cmds, clearErrorAfter(3*time.Second))
-		cmds = append(cmds, fetchSinglePRCmd(h.repoDir, fmt.Sprintf("%d", msg.prNumber)))
+		cmds = append(cmds, fetchSinglePRCmd(h.repoDirForKey(msg.key), msg.key, fmt.Sprintf("%d", msg.key.Number)))
 
 	case prChangesRequestErrorMsg:
-		h.showError(fmt.Sprintf("Failed to request changes on PR #%d: %v", msg.prNumber, msg.err))
+		h.showError(fmt.Sprintf("Failed to request changes on PR #%d: %v", msg.key.Number, msg.err))
 		cmds = append(cmds, clearErrorAfter(5*time.Second))
 
 	case commentsLoadedMsg:
-		h.comments[msg.prNumber] = msg.comments
+		h.comments[msg.key] = msg.comments
 
 	case commentsErrorMsg:
 		h.showError(fmt.Sprintf("Failed to fetch comments: %v", msg.err))
 		cmds = append(cmds, clearErrorAfter(3*time.Second))
 
 	case setupDoneMsg:
-		if h.pending != pendingNone && h.pendingPR == msg.prNumber {
-			cmd := h.dispatchPending(msg.prNumber, msg.wtPath)
+		if h.pending != pendingNone && h.pendingKey == msg.key {
+			cmd := h.dispatchPending(msg.key, msg.wtPath)
 			if cmd != nil {
 				cmds = append(cmds, cmd)
 			}
@@ -465,7 +480,7 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case setupErrorMsg:
 		h.clearPending()
-		h.showError(fmt.Sprintf("Setup failed for PR #%d: %v", msg.prNumber, msg.err))
+		h.showError(fmt.Sprintf("Setup failed for PR #%d: %v", msg.key.Number, msg.err))
 		cmds = append(cmds, clearErrorAfter(5*time.Second))
 
 	// Issue screen messages
@@ -476,10 +491,12 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.loading = false
 			h.state = stateDefault
 		}
-		h.issues.issueList.SetIssues(msg.issues)
+		for _, issue := range msg.issues {
+			h.addIssueToList(issue)
+		}
 		h.reconcileIssueWorktrees()
 		h.reconcileIssueTmuxSessions()
-		cmds = append(cmds, fetchTrackedIssuesCmd(h.repoDir))
+		cmds = append(cmds, fetchTrackedIssuesCmd(h.repos))
 
 	case trackedIssuesLoadedMsg:
 		for _, issue := range msg.issues {
@@ -512,35 +529,37 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, clearErrorAfter(3*time.Second))
 
 	case issueWorktreeCreatedMsg:
-		h.issueWorktrees[msg.issueNumber] = msg.path
-		delete(h.creatingIssueWorktrees, msg.issueNumber)
+		h.issueWorktrees[msg.key] = msg.path
+		delete(h.creatingIssueWorktrees, msg.key)
 		h.reconcileIssueWorktrees()
 		h.reconcileIssueTmuxSessions()
-		if h.pendingIssue != pendingIssueNone && h.pendingIssueNum == msg.issueNumber {
-			cmd := h.dispatchIssuePending(msg.issueNumber, msg.path)
+		if h.pendingIssue != pendingIssueNone && h.pendingIssueKey == msg.key {
+			cmd := h.dispatchIssuePending(msg.key, msg.path)
 			if cmd != nil {
 				cmds = append(cmds, cmd)
 			}
 		}
 
 	case issueWorktreeDeletedMsg:
-		delete(h.issueWorktrees, msg.issueNumber)
-		if session, ok := h.issueTmuxSessions[msg.issueNumber]; ok {
+		delete(h.issueWorktrees, msg.key)
+		if session, ok := h.issueTmuxSessions[msg.key]; ok {
 			session.Kill()
-			delete(h.issueTmuxSessions, msg.issueNumber)
+			delete(h.issueTmuxSessions, msg.key)
 		}
 		h.reconcileIssueWorktrees()
 		h.reconcileIssueTmuxSessions()
 
 	case issueWorktreeErrorMsg:
-		delete(h.creatingIssueWorktrees, msg.issueNumber)
+		delete(h.creatingIssueWorktrees, msg.key)
 		h.reconcileIssueWorktrees()
 		h.clearIssuePending()
 		h.showError(fmt.Sprintf("Issue worktree error: %v", msg.err))
 		cmds = append(cmds, clearErrorAfter(3*time.Second))
 
 	case issueWorktreesScanMsg:
-		h.issueWorktrees = msg.worktrees
+		for k, v := range msg.worktrees {
+			h.issueWorktrees[k] = v
+		}
 		h.reconcileIssueWorktrees()
 
 	// Watchlist screen messages
@@ -552,6 +571,9 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.state = stateDefault
 		}
 		h.watchlist.prList.SetPRs(msg.prs)
+		if cmd := h.processMergedWatchlistPRs(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 
 	case watchlistErrorMsg:
 		if h.active == screenWatchlist && h.loading {
@@ -662,35 +684,43 @@ func (h *home) handleConfirmKey(key string) tea.Cmd {
 		case confirmDeleteWorktree:
 			pr := h.pr.prList.SelectedPR()
 			if pr != nil {
-				return deleteWorktreeCmd(h.wtManager, pr.Number)
+				k := PRKey(pr)
+				mgr := h.wtManagerForKey(k)
+				return deleteWorktreeCmd(mgr, k)
 			}
 		case confirmApprove:
 			pr := h.pr.prList.SelectedPR()
 			if pr != nil {
-				return approvePRCmd(h.repoDir, pr.Number)
+				k := PRKey(pr)
+				return approvePRCmd(pr.RepoDir, k)
 			}
 		case confirmUpdateBranch:
 			pr := h.pr.prList.SelectedPR()
 			if pr != nil {
-				wtPath := h.worktrees[pr.Number]
-				return updateBranchCmd(wtPath, pr.BaseRefName, pr.Number)
+				k := PRKey(pr)
+				wtPath := h.worktrees[k]
+				return updateBranchCmd(wtPath, pr.BaseRefName, k)
 			}
 		case confirmPushBranch:
 			pr := h.pr.prList.SelectedPR()
 			if pr != nil {
-				wtPath := h.worktrees[pr.Number]
-				return pushBranchCmd(wtPath, pr.Number)
+				k := PRKey(pr)
+				wtPath := h.worktrees[k]
+				return pushBranchCmd(wtPath, k)
 			}
 		case confirmDeleteIssueWorktree:
 			issue := h.issues.issueList.SelectedIssue()
 			if issue != nil {
-				return deleteIssueWorktreeCmd(h.wtManager, issue.Number)
+				k := IssueKey(issue)
+				mgr := h.wtManagerForKey(k)
+				return deleteIssueWorktreeCmd(mgr, k)
 			}
 		case confirmFixCommitPush:
 			pr := h.pr.prList.SelectedPR()
 			if pr != nil {
-				wtPath := h.worktrees[pr.Number]
-				return fixCommitPushCmd(wtPath, pr.Number)
+				k := PRKey(pr)
+				wtPath := h.worktrees[k]
+				return fixCommitPushCmd(wtPath, k)
 			}
 		}
 	case "n", "esc":
@@ -717,22 +747,30 @@ func (h *home) handleInputKey(msg tea.KeyMsg) tea.Cmd {
 		if h.inputBuffer != "" {
 			input := h.inputBuffer
 			h.inputBuffer = ""
+			// Use first repo as default for manual adds
+			defaultRepo := ""
+			defaultDir := h.repoDir
+			if len(h.repos) > 0 {
+				defaultRepo = h.repos[0].Name
+				defaultDir = h.repos[0].Dir
+			}
+			defaultKey := ItemKey{Repo: defaultRepo}
 			switch h.inputAction {
 			case inputRequestChanges:
 				pr := h.pr.prList.SelectedPR()
 				h.state = stateDefault
 				if pr != nil {
-					return requestChangesPRCmd(h.repoDir, pr.Number, input)
+					return requestChangesPRCmd(pr.RepoDir, PRKey(pr), input)
 				}
 				return nil
 			case inputAddIssue:
 				h.state = stateDefault
-				return fetchSingleIssueCmd(h.repoDir, input)
+				return fetchSingleIssueCmd(defaultDir, defaultKey, input)
 			case inputAddWatchlistPR:
 				h.state = stateDefault
-				return fetchSingleWatchlistPRCmd(h.repoDir, input)
+				return fetchSingleWatchlistPRCmd(defaultDir, defaultKey, input)
 			default:
-				return fetchSinglePRCmd(h.repoDir, input)
+				return fetchSinglePRCmd(defaultDir, defaultKey, input)
 			}
 		}
 		h.state = stateDefault
@@ -821,36 +859,73 @@ func (h home) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
+func (h *home) repoDirForKey(key ItemKey) string {
+	for _, repo := range h.repos {
+		if repo.Name == key.Repo {
+			return repo.Dir
+		}
+	}
+	return h.repoDir
+}
+
+func (h *home) wtManagerForKey(key ItemKey) *worktree.Manager {
+	if mgr, ok := h.wtManagers[key.Repo]; ok {
+		return mgr
+	}
+	// Fallback for single-repo mode
+	for _, mgr := range h.wtManagers {
+		return mgr
+	}
+	return nil
+}
+
 func Run() error {
 	if err := gh.CheckGH(); err != nil {
 		return err
 	}
 
-	repoDir, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("getting working directory: %w", err)
-	}
-
-	if err := gh.CheckGitRepo(repoDir); err != nil {
-		return err
-	}
-
 	cfg := config.LoadConfig()
-
 	h := newHome()
-	h.repoDir = repoDir
+	h.cfg = cfg
+
 	worktreeDir := ""
 	if cfg != nil {
 		worktreeDir = cfg.WorktreeDir
 	}
-	wtm, err := worktree.NewManager(repoDir, worktreeDir)
-	if err != nil {
-		return fmt.Errorf("initializing worktree manager: %w", err)
+
+	// Resolve repos: from config or fall back to CWD
+	if cfg != nil && len(cfg.RepoSources) > 0 {
+		repos, err := config.ResolveRepoDirs(cfg.RepoSources)
+		if err != nil {
+			return fmt.Errorf("resolving repo sources: %w", err)
+		}
+		if len(repos) == 0 {
+			return fmt.Errorf("no valid git repositories found in repo_sources")
+		}
+		h.repos = repos
+		h.repoDir = repos[0].Dir
+	} else {
+		repoDir, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("getting working directory: %w", err)
+		}
+		if err := gh.CheckGitRepo(repoDir); err != nil {
+			return err
+		}
+		h.repoDir = repoDir
+		h.repos = []config.RepoEntry{{Name: filepath.Base(repoDir), Dir: repoDir}}
 	}
-	h.wtManager = wtm
-	h.cfg = cfg
+
+	// Create per-repo worktree managers
+	for _, repo := range h.repos {
+		wtm, err := worktree.NewManager(repo.Dir, worktreeDir, repo.Name)
+		if err != nil {
+			return fmt.Errorf("initializing worktree manager for %s: %w", repo.Name, err)
+		}
+		h.wtManagers[repo.Name] = wtm
+	}
 
 	p := tea.NewProgram(h, tea.WithAltScreen())
-	_, err = p.Run()
+	_, err := p.Run()
 	return err
 }

@@ -5,6 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/kraft/approver/internal/config"
 	gh "github.com/kraft/approver/internal/github"
 	"github.com/kraft/approver/internal/ui"
 )
@@ -46,7 +47,7 @@ func (s *watchlistScreen) HandleKey(h *home, key string) tea.Cmd {
 	case "R":
 		h.loading = true
 		h.state = stateLoading
-		return tea.Batch(h.spinner.Tick, fetchWatchlistCmd(h.repoDir))
+		return tea.Batch(h.spinner.Tick, fetchWatchlistCmd(h.repos))
 
 	case "o":
 		pr := s.prList.SelectedPR()
@@ -118,7 +119,8 @@ func (s *watchlistScreen) viewDashboard(h *home, height int) string {
 
 	if s.detailMode == watchlistDetailSummary {
 		if pr != nil {
-			if summary, ok := h.watchlistSummaries[pr.Number]; ok {
+			k := PRKey(pr)
+			if summary, ok := h.watchlistSummaries[k]; ok {
 				sections := fmt.Sprintf("%s\n\n  %s",
 					ui.TitleStyle.Render(fmt.Sprintf("#%d Summary", pr.Number)),
 					summary)
@@ -142,20 +144,41 @@ func (s *watchlistScreen) viewDashboard(h *home, height int) string {
 
 // Watchlist commands
 
-func fetchWatchlistCmd(repoDir string) tea.Cmd {
+func fetchWatchlistCmd(repos []config.RepoEntry) tea.Cmd {
 	return func() tea.Msg {
 		tracked, err := loadTrackedPRs()
 		if err != nil {
 			return watchlistErrorMsg{err: fmt.Errorf("loading watchlist: %w", err)}
 		}
 
+		// Use first repo as default
+		repoDir := ""
+		repoName := ""
+		if len(repos) > 0 {
+			repoDir = repos[0].Dir
+			repoName = repos[0].Name
+		}
+
 		var prs []gh.PR
 		for _, t := range tracked {
-			pr, err := gh.FetchPR(repoDir, fmt.Sprintf("%d", t.Number))
+			fetchDir := repoDir
+			fetchName := repoName
+			if t.Repo != "" {
+				for _, r := range repos {
+					if r.Name == t.Repo {
+						fetchDir = r.Dir
+						fetchName = r.Name
+						break
+					}
+				}
+			}
+			pr, err := gh.FetchPR(fetchDir, fmt.Sprintf("%d", t.Number))
 			if err != nil {
 				continue
 			}
 			pr.Source = "manual"
+			pr.Repo = fetchName
+			pr.RepoDir = fetchDir
 			prs = append(prs, *pr)
 		}
 
@@ -163,13 +186,15 @@ func fetchWatchlistCmd(repoDir string) tea.Cmd {
 	}
 }
 
-func fetchSingleWatchlistPRCmd(repoDir, numberOrURL string) tea.Cmd {
+func fetchSingleWatchlistPRCmd(repoDir string, key ItemKey, numberOrURL string) tea.Cmd {
 	return func() tea.Msg {
 		pr, err := gh.FetchPR(repoDir, numberOrURL)
 		if err != nil {
 			return watchlistAddErrorMsg{err: err}
 		}
 		pr.Source = "manual"
+		pr.Repo = key.Repo
+		pr.RepoDir = repoDir
 		return watchlistPRAddedMsg{pr: *pr}
 	}
 }

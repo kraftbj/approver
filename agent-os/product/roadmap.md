@@ -59,10 +59,18 @@
 - **Fix Detail Tab** - Tab cycles info/review/comments/fix; shows progress spinner or agent output
 - **Configurable Tools** - `fix_allowed_tools` config option (default: Read,Write,Edit,Glob,Grep)
 
+## Phase 9: Multi-Repo Support [DONE]
+
+- **Repo sources config** - `repo_sources` in config.yaml with `path:` (single repo) and `scan_dir:` (scan 1 level deep); falls back to CWD if omitted
+- **ItemKey refactor** - All state maps keyed by `{Repo, Number}` instead of bare `int`, enabling cross-repo state tracking
+- **Grouped list rendering** - PR and Issue lists show repo headers when multiple repos are present; single-repo mode unchanged
+- **Multi-repo fetching** - Parallel fetch/poll for each configured repo on Init and poll tick
+- **Worktree namespacing** - Worktrees namespaced under `{baseDir}/{repoName}/` to avoid collisions
+- **Persistence namespacing** - Review files stored under `reviews/{repoName}/`; tracked PRs/issues carry `repo` field; backward-compatible loading of old flat files
+- **Merged PR detection** - `state` field on PRs; purple `M` badge on merged watchlist PRs; auto-removal on second poll cycle with worktree cleanup
+
 ## Future
 - ~~**Review Word Wrap**~~ - Done. Review output, comments, and issue descriptions now word-wrap to fit the detail panel width
 - ~~**Optimistic Approval State**~~ - Done. After approving a PR, the review decision badge flips to APPROVED immediately; the background re-fetch confirms the state
 - **Inline Comment Drafting** - File/line browser UX for posting inline review comments
-- **Multi-Repo** - Config model for multiple repo dirs, cross-repo watchlist
 - **Watchlist: Issues** - Track issues alongside PRs in the watchlist
-- **Cross-Repo Watchlist** - Track PRs/issues from repos other than the current one

@@ -22,20 +22,24 @@ func reviewsDir() (string, error) {
 }
 
 // reviewFilePath returns the path for a specific PR's review result.
-func reviewFilePath(prNumber int) (string, error) {
+func reviewFilePath(key ItemKey) (string, error) {
 	dir, err := reviewsDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "review-"+strconv.Itoa(prNumber)+".json"), nil
+	if key.Repo != "" {
+		return filepath.Join(dir, key.Repo, "review-"+strconv.Itoa(key.Number)+".json"), nil
+	}
+	return filepath.Join(dir, "review-"+strconv.Itoa(key.Number)+".json"), nil
 }
 
 // saveReviewResult writes a review result to disk.
-func saveReviewResult(prNumber int, result claude.ReviewResult) error {
-	dir, err := reviewsDir()
+func saveReviewResult(key ItemKey, result claude.ReviewResult) error {
+	path, err := reviewFilePath(key)
 	if err != nil {
 		return err
 	}
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -45,29 +49,47 @@ func saveReviewResult(prNumber int, result claude.ReviewResult) error {
 		return err
 	}
 
-	path, err := reviewFilePath(prNumber)
-	if err != nil {
-		return err
-	}
 	return os.WriteFile(path, data, 0o600)
 }
 
 // loadAllReviews reads all persisted review results from disk.
-func loadAllReviews() map[int]claude.ReviewResult {
-	reviews := make(map[int]claude.ReviewResult)
+func loadAllReviews() map[ItemKey]claude.ReviewResult {
+	reviews := make(map[ItemKey]claude.ReviewResult)
 
 	dir, err := reviewsDir()
 	if err != nil {
 		return reviews
 	}
+
+	// Load flat review files (backward compat — no repo subdir)
+	loadReviewsFromDir(dir, "", reviews)
+
+	// Load namespaced review files (reviews/{repoName}/review-N.json)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return reviews
 	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		repoName := entry.Name()
+		repoDir := filepath.Join(dir, repoName)
+		loadReviewsFromDir(repoDir, repoName, reviews)
+	}
+
+	return reviews
+}
+
+func loadReviewsFromDir(dir, repoName string, reviews map[ItemKey]claude.ReviewResult) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
 
 	for _, entry := range entries {
 		name := entry.Name()
-		if !strings.HasPrefix(name, "review-") || !strings.HasSuffix(name, ".json") {
+		if entry.IsDir() || !strings.HasPrefix(name, "review-") || !strings.HasSuffix(name, ".json") {
 			continue
 		}
 		numStr := strings.TrimPrefix(name, "review-")
@@ -86,10 +108,8 @@ func loadAllReviews() map[int]claude.ReviewResult {
 		if err := json.Unmarshal(data, &result); err != nil {
 			continue
 		}
-		reviews[prNumber] = result
+		reviews[ItemKey{Repo: repoName, Number: prNumber}] = result
 	}
-
-	return reviews
 }
 
 // loadReviewsCmd is a tea.Cmd that loads all persisted reviews.
@@ -99,4 +119,3 @@ func loadReviewsCmd() tea.Cmd {
 		return reviewsLoadedMsg{reviews: reviews}
 	}
 }
-

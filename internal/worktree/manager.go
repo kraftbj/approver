@@ -12,24 +12,29 @@ import (
 
 // Manager handles git worktree operations for PR branches.
 type Manager struct {
-	// BaseDir is where worktrees are created (default: ~/.config/approver/worktrees).
+	// BaseDir is where worktrees are created (default: ~/.config/approver/worktrees/{repoName}).
 	BaseDir string
 
 	// RepoDir is the main git repository to create worktrees from.
 	RepoDir string
+
+	// RepoName is the short name of the repository.
+	RepoName string
 }
 
 // NewManager creates a worktree manager with default paths.
-func NewManager(repoDir string, worktreeDir string) (*Manager, error) {
+// Worktrees are namespaced under {baseDir}/{repoName}/.
+func NewManager(repoDir string, worktreeDir string, repoName string) (*Manager, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("getting home directory: %w", err)
 	}
-	baseDir := filepath.Join(home, ".config", "approver", "worktrees")
+	rootDir := filepath.Join(home, ".config", "approver", "worktrees")
 	if worktreeDir != "" {
-		baseDir = worktreeDir
+		rootDir = worktreeDir
 	}
-	return &Manager{BaseDir: baseDir, RepoDir: repoDir}, nil
+	baseDir := filepath.Join(rootDir, repoName)
+	return &Manager{BaseDir: baseDir, RepoDir: repoDir, RepoName: repoName}, nil
 }
 
 // WorktreePath returns the path for a PR's worktree.

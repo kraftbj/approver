@@ -10,7 +10,7 @@ import (
 )
 
 // ghPRFields is the set of fields we request from gh pr list/view.
-const ghPRFields = "number,title,author,headRefName,baseRefName,url,reviewDecision,statusCheckRollup,labels,additions,deletions,updatedAt,reviewRequests,latestReviews,comments"
+const ghPRFields = "number,title,author,headRefName,baseRefName,url,reviewDecision,statusCheckRollup,labels,additions,deletions,updatedAt,reviewRequests,latestReviews,comments,state"
 
 // FetchPRs fetches all PRs where the current user's review is requested.
 // repoDir is used as the working directory for the gh command (determines which repo).

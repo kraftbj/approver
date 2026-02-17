@@ -141,7 +141,7 @@ func (h *home) showInfo(msg string) {
 
 func (h *home) addPRToList(pr gh.PR) {
 	for i, existing := range h.pr.prList.PRs {
-		if existing.Number == pr.Number {
+		if existing.Number == pr.Number && existing.Repo == pr.Repo {
 			h.pr.prList.PRs[i] = pr
 			return
 		}
@@ -163,7 +163,7 @@ func (h *home) removePR(number int) {
 
 func (h *home) addIssueToList(issue gh.Issue) {
 	for i, existing := range h.issues.issueList.Issues {
-		if existing.Number == issue.Number {
+		if existing.Number == issue.Number && existing.Repo == issue.Repo {
 			h.issues.issueList.Issues[i] = issue
 			return
 		}
@@ -185,7 +185,7 @@ func (h *home) removeIssue(number int) {
 
 func (h *home) addWatchlistPR(pr gh.PR) {
 	for i, existing := range h.watchlist.prList.PRs {
-		if existing.Number == pr.Number {
+		if existing.Number == pr.Number && existing.Repo == pr.Repo {
 			h.watchlist.prList.PRs[i] = pr
 			return
 		}
@@ -205,29 +205,64 @@ func (h *home) removeWatchlistPR(number int) {
 	}
 }
 
-func (h *home) startReview(prNumber int, wtPath string) tea.Cmd {
+func (h *home) processMergedWatchlistPRs() tea.Cmd {
+	var cmds []tea.Cmd
+	var toRemove []ItemKey
+
+	for _, pr := range h.watchlist.prList.PRs {
+		k := PRKey(&pr)
+		if pr.State != "MERGED" {
+			delete(h.mergedSeen, k)
+			continue
+		}
+		if !h.mergedSeen[k] {
+			h.mergedSeen[k] = true
+			continue
+		}
+		toRemove = append(toRemove, k)
+	}
+
+	for _, k := range toRemove {
+		h.removeWatchlistPR(k.Number)
+		cmds = append(cmds, removeTrackedPRCmd(k.Number))
+
+		if _, exists := h.worktrees[k]; exists {
+			mgr := h.wtManagerForKey(k)
+			cmds = append(cmds, deleteWorktreeCmd(mgr, k))
+		}
+
+		delete(h.mergedSeen, k)
+	}
+
+	if len(cmds) > 0 {
+		return tea.Batch(cmds...)
+	}
+	return nil
+}
+
+func (h *home) startReview(key ItemKey, wtPath, repoDir string) tea.Cmd {
 	h.pr.detailMode = detailReview
 	ctx, cancel := context.WithCancel(context.Background())
-	h.reviewing[prNumber] = cancel
-	h.reviewStep[prNumber] = funReviewMessages[0]
+	h.reviewing[key] = cancel
+	h.reviewStep[key] = funReviewMessages[0]
 	h.reviewMsgIdx = 0
 	h.reconcileClaudeState()
 	return tea.Batch(
 		h.spinner.Tick,
-		runClaudeReviewCmd(ctx, h.cfg, prNumber, wtPath, h.repoDir),
+		runClaudeReviewCmd(ctx, h.cfg, key, wtPath, repoDir),
 		reviewSpinnerTick(),
 	)
 }
 
-func (h *home) startTmux(prNumber int, wtPath string) tea.Cmd {
-	session, ok := h.tmuxSessions[prNumber]
+func (h *home) startTmux(key ItemKey, wtPath string) tea.Cmd {
+	session, ok := h.tmuxSessions[key]
 	if !ok || !session.Exists() {
-		session = claude.NewTmuxSession(prNumber, wtPath)
+		session = claude.NewTmuxSession(key.Number, wtPath)
 		if err := session.Create(); err != nil {
 			h.showError(fmt.Sprintf("Failed to create tmux session: %v", err))
 			return clearErrorAfter(3 * time.Second)
 		}
-		h.tmuxSessions[prNumber] = session
+		h.tmuxSessions[key] = session
 		h.reconcileClaudeState()
 	}
 	return tea.ExecProcess(session.AttachCmd(), func(err error) tea.Msg {
@@ -238,32 +273,33 @@ func (h *home) startTmux(prNumber int, wtPath string) tea.Cmd {
 	})
 }
 
-func (h *home) dispatchPending(prNumber int, wtPath string) tea.Cmd {
+func (h *home) dispatchPending(key ItemKey, wtPath string) tea.Cmd {
 	action := h.pending
 	h.clearPending()
+	repoDir := h.repoDirForKey(key)
 	switch action {
 	case pendingReview:
-		return h.startReview(prNumber, wtPath)
+		return h.startReview(key, wtPath, repoDir)
 	case pendingTmux:
-		return h.startTmux(prNumber, wtPath)
+		return h.startTmux(key, wtPath)
 	}
 	return nil
 }
 
 func (h *home) clearPending() {
 	h.pending = pendingNone
-	h.pendingPR = 0
+	h.pendingKey = ItemKey{}
 }
 
-func (h *home) startIssueTmux(issueNumber int, wtPath string) tea.Cmd {
-	session, ok := h.issueTmuxSessions[issueNumber]
+func (h *home) startIssueTmux(key ItemKey, wtPath string) tea.Cmd {
+	session, ok := h.issueTmuxSessions[key]
 	if !ok || !session.Exists() {
-		session = claude.NewIssueTmuxSession(issueNumber, wtPath)
+		session = claude.NewIssueTmuxSession(key.Number, wtPath)
 		if err := session.Create(); err != nil {
 			h.showError(fmt.Sprintf("Failed to create tmux session: %v", err))
 			return clearErrorAfter(3 * time.Second)
 		}
-		h.issueTmuxSessions[issueNumber] = session
+		h.issueTmuxSessions[key] = session
 		h.reconcileIssueTmuxSessions()
 	}
 	return tea.ExecProcess(session.AttachCmd(), func(err error) tea.Msg {
@@ -274,19 +310,19 @@ func (h *home) startIssueTmux(issueNumber int, wtPath string) tea.Cmd {
 	})
 }
 
-func (h *home) dispatchIssuePending(issueNumber int, wtPath string) tea.Cmd {
+func (h *home) dispatchIssuePending(key ItemKey, wtPath string) tea.Cmd {
 	action := h.pendingIssue
 	h.clearIssuePending()
 	switch action {
 	case pendingIssueTmux:
-		return h.startIssueTmux(issueNumber, wtPath)
+		return h.startIssueTmux(key, wtPath)
 	}
 	return nil
 }
 
 func (h *home) clearIssuePending() {
 	h.pendingIssue = pendingIssueNone
-	h.pendingIssueNum = 0
+	h.pendingIssueKey = ItemKey{}
 }
 
 func (h *home) handleFixSelectKey(key string) tea.Cmd {
@@ -330,24 +366,25 @@ func (h *home) handleFixSelectKey(key string) tea.Cmd {
 			h.state = stateDefault
 			return nil
 		}
-		wtPath := h.worktrees[pr.Number]
+		k := PRKey(pr)
+		wtPath := h.worktrees[k]
 		h.state = stateDefault
-		return h.startFix(pr.Number, wtPath, selected)
+		return h.startFix(k, wtPath, selected)
 	case "esc":
 		h.state = stateDefault
 	}
 	return nil
 }
 
-func (h *home) startFix(prNumber int, wtPath string, items []claude.FixItem) tea.Cmd {
+func (h *home) startFix(key ItemKey, wtPath string, items []claude.FixItem) tea.Cmd {
 	h.pr.detailMode = detailFix
 	ctx, cancel := context.WithCancel(context.Background())
-	h.fixing[prNumber] = cancel
-	h.fixStep[prNumber] = funFixMessages[0]
+	h.fixing[key] = cancel
+	h.fixStep[key] = funFixMessages[0]
 	h.fixMsgIdx = 0
 	return tea.Batch(
 		h.spinner.Tick,
-		runFixCmd(ctx, h.cfg, prNumber, wtPath, items),
+		runFixCmd(ctx, h.cfg, key, wtPath, items),
 		fixSpinnerTick(),
 	)
 }

@@ -2,19 +2,19 @@ package app
 
 func (h *home) reconcileWorktrees() {
 	for i := range h.pr.prList.PRs {
-		num := h.pr.prList.PRs[i].Number
-		_, exists := h.worktrees[num]
+		k := PRKey(&h.pr.prList.PRs[i])
+		_, exists := h.worktrees[k]
 		h.pr.prList.PRs[i].HasWorktree = exists
-		h.pr.prList.PRs[i].IsCreatingWorktree = h.creatingWorktrees[num]
+		h.pr.prList.PRs[i].IsCreatingWorktree = h.creatingWorktrees[k]
 	}
 }
 
 func (h *home) reconcileClaudeState() {
 	for i := range h.pr.prList.PRs {
-		num := h.pr.prList.PRs[i].Number
-		_, hasReview := h.reviews[num]
-		_, isReviewing := h.reviewing[num]
-		session, hasTmux := h.tmuxSessions[num]
+		k := PRKey(&h.pr.prList.PRs[i])
+		_, hasReview := h.reviews[k]
+		_, isReviewing := h.reviewing[k]
+		session, hasTmux := h.tmuxSessions[k]
 		h.pr.prList.PRs[i].HasReview = hasReview
 		h.pr.prList.PRs[i].IsReviewing = isReviewing
 		h.pr.prList.PRs[i].HasTmux = hasTmux && session.Exists()
@@ -23,7 +23,8 @@ func (h *home) reconcileClaudeState() {
 
 func (h *home) takeSnapshots() {
 	for _, pr := range h.pr.prList.PRs {
-		h.prSnapshots[pr.Number] = prSnapshot{
+		k := PRKey(&pr)
+		h.prSnapshots[k] = prSnapshot{
 			commentCount:   pr.CommentCount,
 			ciStatus:       pr.CIStatus(),
 			reviewDecision: pr.ReviewDecision,
@@ -34,7 +35,8 @@ func (h *home) takeSnapshots() {
 func (h *home) reconcileNotifications() {
 	for i := range h.pr.prList.PRs {
 		pr := &h.pr.prList.PRs[i]
-		snap, exists := h.prSnapshots[pr.Number]
+		k := PRKey(pr)
+		snap, exists := h.prSnapshots[k]
 		if !exists {
 			continue
 		}
@@ -48,17 +50,17 @@ func (h *home) reconcileNotifications() {
 
 func (h *home) reconcileIssueWorktrees() {
 	for i := range h.issues.issueList.Issues {
-		num := h.issues.issueList.Issues[i].Number
-		_, exists := h.issueWorktrees[num]
+		k := IssueKey(&h.issues.issueList.Issues[i])
+		_, exists := h.issueWorktrees[k]
 		h.issues.issueList.Issues[i].HasWorktree = exists
-		h.issues.issueList.Issues[i].IsCreatingWorktree = h.creatingIssueWorktrees[num]
+		h.issues.issueList.Issues[i].IsCreatingWorktree = h.creatingIssueWorktrees[k]
 	}
 }
 
 func (h *home) reconcileIssueTmuxSessions() {
 	for i := range h.issues.issueList.Issues {
-		num := h.issues.issueList.Issues[i].Number
-		session, hasTmux := h.issueTmuxSessions[num]
+		k := IssueKey(&h.issues.issueList.Issues[i])
+		session, hasTmux := h.issueTmuxSessions[k]
 		h.issues.issueList.Issues[i].HasTmux = hasTmux && session.Exists()
 	}
 }

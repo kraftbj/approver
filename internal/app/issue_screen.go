@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/kraft/approver/internal/claude"
+	"github.com/kraft/approver/internal/config"
 	gh "github.com/kraft/approver/internal/github"
 	"github.com/kraft/approver/internal/ui"
 	"github.com/kraft/approver/internal/worktree"
@@ -49,7 +50,12 @@ func (s *issueScreen) HandleKey(h *home, key string) tea.Cmd {
 	case "R":
 		h.loading = true
 		h.state = stateLoading
-		return tea.Batch(h.spinner.Tick, fetchIssuesCmd(h.repoDir, h.cfg.PRLimit))
+		var cmds []tea.Cmd
+		cmds = append(cmds, h.spinner.Tick)
+		for _, repo := range h.repos {
+			cmds = append(cmds, fetchIssuesCmd(repo.Dir, repo.Name, h.cfg.PRLimit))
+		}
+		return tea.Batch(cmds...)
 
 	case "o":
 		issue := s.issueList.SelectedIssue()
@@ -69,22 +75,25 @@ func (s *issueScreen) HandleKey(h *home, key string) tea.Cmd {
 	case "w":
 		issue := s.issueList.SelectedIssue()
 		if issue != nil {
-			if _, exists := h.issueWorktrees[issue.Number]; exists {
+			k := IssueKey(issue)
+			if _, exists := h.issueWorktrees[k]; exists {
 				h.showError(fmt.Sprintf("Worktree already exists for issue #%d", issue.Number))
 				return clearErrorAfter(3 * time.Second)
 			}
-			if h.creatingIssueWorktrees[issue.Number] {
+			if h.creatingIssueWorktrees[k] {
 				return nil
 			}
-			h.creatingIssueWorktrees[issue.Number] = true
+			h.creatingIssueWorktrees[k] = true
 			h.reconcileIssueWorktrees()
-			return tea.Batch(h.spinner.Tick, createIssueWorktreeCmd(h.wtManager, issue.Number, issue.Title))
+			mgr := h.wtManagerForKey(k)
+			return tea.Batch(h.spinner.Tick, createIssueWorktreeCmd(mgr, k, issue.Title))
 		}
 
 	case "W":
 		issue := s.issueList.SelectedIssue()
 		if issue != nil {
-			if _, exists := h.issueWorktrees[issue.Number]; !exists {
+			k := IssueKey(issue)
+			if _, exists := h.issueWorktrees[k]; !exists {
 				h.showError(fmt.Sprintf("No worktree for issue #%d", issue.Number))
 				return clearErrorAfter(3 * time.Second)
 			}
@@ -114,6 +123,7 @@ func (s *issueScreen) HandleKey(h *home, key string) tea.Cmd {
 		if issue == nil {
 			return nil
 		}
+		k := IssueKey(issue)
 		if !claude.CheckTmux() {
 			h.showError("tmux not found on PATH")
 			return clearErrorAfter(3 * time.Second)
@@ -122,18 +132,19 @@ func (s *issueScreen) HandleKey(h *home, key string) tea.Cmd {
 			h.showError("claude CLI not found on PATH")
 			return clearErrorAfter(3 * time.Second)
 		}
-		wtPath, exists := h.issueWorktrees[issue.Number]
+		wtPath, exists := h.issueWorktrees[k]
 		if !exists {
-			if h.creatingIssueWorktrees[issue.Number] {
+			if h.creatingIssueWorktrees[k] {
 				return nil
 			}
 			h.pendingIssue = pendingIssueTmux
-			h.pendingIssueNum = issue.Number
-			h.creatingIssueWorktrees[issue.Number] = true
+			h.pendingIssueKey = k
+			h.creatingIssueWorktrees[k] = true
 			h.reconcileIssueWorktrees()
-			return tea.Batch(h.spinner.Tick, createIssueWorktreeCmd(h.wtManager, issue.Number, issue.Title))
+			mgr := h.wtManagerForKey(k)
+			return tea.Batch(h.spinner.Tick, createIssueWorktreeCmd(mgr, k, issue.Title))
 		}
-		return h.startIssueTmux(issue.Number, wtPath)
+		return h.startIssueTmux(k, wtPath)
 
 	case "tab":
 		switch s.detailMode {
@@ -187,11 +198,12 @@ func (s *issueScreen) viewDashboard(h *home, height int) string {
 	issue := s.issueList.SelectedIssue()
 
 	if s.detailMode == issueDetailAI {
-		if issue != nil && h.issueTmuxSessions[issue.Number] != nil {
-			detailView = s.detail.ViewWorking(issue, h.spinner.View(), "Claude session active")
-		} else {
-			if issue != nil {
-				_, hasWT := h.issueWorktrees[issue.Number]
+		if issue != nil {
+			k := IssueKey(issue)
+			if h.issueTmuxSessions[k] != nil {
+				detailView = s.detail.ViewWorking(issue, h.spinner.View(), "Claude session active")
+			} else {
+				_, hasWT := h.issueWorktrees[k]
 				msg := "No AI session. Press c to start a Claude tmux session."
 				if !hasWT {
 					msg = "No AI session. Press c to create a worktree and start Claude."
@@ -200,9 +212,9 @@ func (s *issueScreen) viewDashboard(h *home, height int) string {
 					ui.TitleStyle.Render(fmt.Sprintf("#%d AI Session", issue.Number)),
 					ui.DimStyle.Render(msg))
 				detailView = ui.DetailPanelStyle.Width(detailWidth).Height(height).Render(sections)
-			} else {
-				detailView = ui.DetailPanelStyle.Width(detailWidth).Height(height).Render(ui.DimStyle.Render("No issue selected"))
 			}
+		} else {
+			detailView = ui.DetailPanelStyle.Width(detailWidth).Height(height).Render(ui.DimStyle.Render("No issue selected"))
 		}
 	} else {
 		detailView = s.detail.View(issue)
@@ -221,42 +233,48 @@ const (
 
 // Issue commands
 
-func fetchIssuesCmd(repoDir string, limit int) tea.Cmd {
+func fetchIssuesCmd(repoDir, repoName string, limit int) tea.Cmd {
 	return func() tea.Msg {
 		issues, err := gh.FetchIssues(repoDir, limit)
 		if err != nil {
 			return issuesErrorMsg{err: err}
 		}
+		for i := range issues {
+			issues[i].Repo = repoName
+			issues[i].RepoDir = repoDir
+		}
 		return issuesLoadedMsg{issues: issues}
 	}
 }
 
-func fetchSingleIssueCmd(repoDir, numberOrURL string) tea.Cmd {
+func fetchSingleIssueCmd(repoDir string, key ItemKey, numberOrURL string) tea.Cmd {
 	return func() tea.Msg {
 		issue, err := gh.FetchIssue(repoDir, numberOrURL)
 		if err != nil {
 			return issueAddErrorMsg{err: err}
 		}
+		issue.Repo = key.Repo
+		issue.RepoDir = repoDir
 		return issueAddedMsg{issue: *issue}
 	}
 }
 
-func createIssueWorktreeCmd(mgr *worktree.Manager, issueNumber int, title string) tea.Cmd {
+func createIssueWorktreeCmd(mgr *worktree.Manager, key ItemKey, title string) tea.Cmd {
 	return func() tea.Msg {
-		path, err := mgr.CreateForIssue(issueNumber, title)
+		path, err := mgr.CreateForIssue(key.Number, title)
 		if err != nil {
-			return issueWorktreeErrorMsg{issueNumber: issueNumber, err: err}
+			return issueWorktreeErrorMsg{key: key, err: err}
 		}
-		return issueWorktreeCreatedMsg{issueNumber: issueNumber, path: path}
+		return issueWorktreeCreatedMsg{key: key, path: path}
 	}
 }
 
-func deleteIssueWorktreeCmd(mgr *worktree.Manager, issueNumber int) tea.Cmd {
+func deleteIssueWorktreeCmd(mgr *worktree.Manager, key ItemKey) tea.Cmd {
 	return func() tea.Msg {
-		if err := mgr.DeleteIssueWorktree(issueNumber); err != nil {
-			return issueWorktreeErrorMsg{issueNumber: issueNumber, err: err}
+		if err := mgr.DeleteIssueWorktree(key.Number); err != nil {
+			return issueWorktreeErrorMsg{key: key, err: err}
 		}
-		return issueWorktreeDeletedMsg{issueNumber: issueNumber}
+		return issueWorktreeDeletedMsg{key: key}
 	}
 }
 
@@ -266,5 +284,47 @@ func removeTrackedIssueCmd(issueNumber int) tea.Cmd {
 			return trackedRemoveErrorMsg{err: err}
 		}
 		return nil
+	}
+}
+
+func fetchTrackedIssuesCmd(repos []config.RepoEntry) tea.Cmd {
+	return func() tea.Msg {
+		tracked, err := loadTrackedIssues()
+		if err != nil {
+			return issuesErrorMsg{err: fmt.Errorf("loading tracked issues: %w", err)}
+		}
+
+		// Use first repo as default for fetching tracked issues
+		repoDir := ""
+		repoName := ""
+		if len(repos) > 0 {
+			repoDir = repos[0].Dir
+			repoName = repos[0].Name
+		}
+
+		var issues []gh.Issue
+		for _, t := range tracked {
+			fetchDir := repoDir
+			fetchName := repoName
+			if t.Repo != "" {
+				for _, r := range repos {
+					if r.Name == t.Repo {
+						fetchDir = r.Dir
+						fetchName = r.Name
+						break
+					}
+				}
+			}
+			issue, err := gh.FetchIssue(fetchDir, fmt.Sprintf("%d", t.Number))
+			if err != nil {
+				continue
+			}
+			issue.Source = "manual"
+			issue.Repo = fetchName
+			issue.RepoDir = fetchDir
+			issues = append(issues, *issue)
+		}
+
+		return trackedIssuesLoadedMsg{issues: issues}
 	}
 }

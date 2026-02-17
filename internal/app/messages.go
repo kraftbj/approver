@@ -7,12 +7,14 @@ import (
 
 // worktreesScanMsg carries the result of scanning existing worktrees.
 type worktreesScanMsg struct {
-	worktrees map[int]string
+	repo      string
+	worktrees map[ItemKey]string
 }
 
 // issueWorktreesScanMsg carries the result of scanning existing issue worktrees.
 type issueWorktreesScanMsg struct {
-	worktrees map[int]string
+	repo      string
+	worktrees map[ItemKey]string
 }
 
 // trackedPRsLoadedMsg carries the fetched tracked PRs.
@@ -27,7 +29,7 @@ type trackedIssuesLoadedMsg struct {
 
 // reviewsLoadedMsg carries persisted review results loaded from disk.
 type reviewsLoadedMsg struct {
-	reviews map[int]claude.ReviewResult
+	reviews map[ItemKey]claude.ReviewResult
 }
 
 // browserErrorMsg is sent when opening a URL in the browser fails.
@@ -42,14 +44,14 @@ type trackedRemoveErrorMsg struct {
 
 // commentsLoadedMsg is sent when PR comments have been fetched.
 type commentsLoadedMsg struct {
-	prNumber int
+	key      ItemKey
 	comments []gh.Comment
 }
 
 // commentsErrorMsg is sent when fetching comments fails.
 type commentsErrorMsg struct {
-	prNumber int
-	err      error
+	key ItemKey
+	err error
 }
 
 // Messages used by the Bubble Tea update loop.
@@ -69,19 +71,19 @@ type hideErrMsg struct{}
 
 // worktreeCreatedMsg is sent after a worktree is successfully created.
 type worktreeCreatedMsg struct {
-	prNumber int
-	path     string
+	key  ItemKey
+	path string
 }
 
 // worktreeDeletedMsg is sent after a worktree is deleted.
 type worktreeDeletedMsg struct {
-	prNumber int
+	key ItemKey
 }
 
 // worktreeErrorMsg is sent when a worktree operation fails.
 type worktreeErrorMsg struct {
-	prNumber int
-	err      error
+	key ItemKey
+	err error
 }
 
 // prAddedMsg is sent when a single PR is fetched for manual tracking.
@@ -96,20 +98,20 @@ type prAddErrorMsg struct {
 
 // claudeReviewDoneMsg is sent when the review pipeline completes.
 type claudeReviewDoneMsg struct {
-	prNumber int
-	review   claude.ReviewResult
+	key    ItemKey
+	review claude.ReviewResult
 }
 
 // claudeReviewErrorMsg is sent when the review pipeline fails.
 type claudeReviewErrorMsg struct {
-	prNumber int
-	err      error
+	key ItemKey
+	err error
 }
 
 // claudeReviewProgressMsg carries pipeline step updates for display.
 type claudeReviewProgressMsg struct {
-	prNumber int
-	step     string
+	key  ItemKey
+	step string
 }
 
 // tmuxSessionErrorMsg is sent when a tmux operation fails.
@@ -122,46 +124,46 @@ type reviewSpinnerTickMsg struct{}
 
 // prApprovedMsg is sent when a PR is successfully approved.
 type prApprovedMsg struct {
-	prNumber int
+	key ItemKey
 }
 
 // prApproveErrorMsg is sent when approving a PR fails.
 type prApproveErrorMsg struct {
-	prNumber int
-	err      error
+	key ItemKey
+	err error
 }
 
 // prChangesRequestedMsg is sent when changes are successfully requested on a PR.
 type prChangesRequestedMsg struct {
-	prNumber int
+	key ItemKey
 }
 
 // prChangesRequestErrorMsg is sent when requesting changes fails.
 type prChangesRequestErrorMsg struct {
-	prNumber int
-	err      error
+	key ItemKey
+	err error
 }
 
 // branchUpdatedMsg is sent when a worktree branch is updated from trunk.
 type branchUpdatedMsg struct {
-	prNumber int
+	key ItemKey
 }
 
 // branchUpdateErrorMsg is sent when updating a branch fails.
 type branchUpdateErrorMsg struct {
-	prNumber int
-	err      error
+	key ItemKey
+	err error
 }
 
 // branchPushedMsg is sent when a worktree branch is pushed to origin.
 type branchPushedMsg struct {
-	prNumber int
+	key ItemKey
 }
 
 // branchPushErrorMsg is sent when pushing a branch fails.
 type branchPushErrorMsg struct {
-	prNumber int
-	err      error
+	key ItemKey
+	err error
 }
 
 // pollTickMsg signals that a background poll interval has elapsed.
@@ -174,14 +176,14 @@ type pollPRsLoadedMsg struct {
 
 // setupDoneMsg is sent when a per-repo setup command completes.
 type setupDoneMsg struct {
-	prNumber int
-	wtPath   string
+	key    ItemKey
+	wtPath string
 }
 
 // setupErrorMsg is sent when a per-repo setup command fails.
 type setupErrorMsg struct {
-	prNumber int
-	err      error
+	key ItemKey
+	err error
 }
 
 // Issue screen messages
@@ -208,19 +210,19 @@ type issueAddErrorMsg struct {
 
 // issueWorktreeCreatedMsg is sent after an issue worktree is created.
 type issueWorktreeCreatedMsg struct {
-	issueNumber int
-	path        string
+	key  ItemKey
+	path string
 }
 
 // issueWorktreeDeletedMsg is sent after an issue worktree is deleted.
 type issueWorktreeDeletedMsg struct {
-	issueNumber int
+	key ItemKey
 }
 
 // issueWorktreeErrorMsg is sent when an issue worktree operation fails.
 type issueWorktreeErrorMsg struct {
-	issueNumber int
-	err         error
+	key ItemKey
+	err error
 }
 
 // Watchlist screen messages
@@ -249,33 +251,32 @@ type watchlistAddErrorMsg struct {
 
 // fixDoneMsg is sent when the fix agent completes successfully.
 type fixDoneMsg struct {
-	prNumber int
-	output   string
+	key    ItemKey
+	output string
 }
 
 // fixErrorMsg is sent when the fix agent fails.
 type fixErrorMsg struct {
-	prNumber int
-	err      error
+	key ItemKey
+	err error
 }
 
 // fixProgressMsg carries fix agent progress updates.
 type fixProgressMsg struct {
-	prNumber int
-	step     string
+	key  ItemKey
+	step string
 }
 
 // fixCommitPushDoneMsg is sent when fix commit+push completes.
 type fixCommitPushDoneMsg struct {
-	prNumber int
+	key ItemKey
 }
 
 // fixCommitPushErrorMsg is sent when fix commit+push fails.
 type fixCommitPushErrorMsg struct {
-	prNumber int
-	err      error
+	key ItemKey
+	err error
 }
 
 // fixSpinnerTickMsg rotates the fun fix spinner messages.
 type fixSpinnerTickMsg struct{}
-

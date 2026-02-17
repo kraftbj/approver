@@ -5,14 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	tea "github.com/charmbracelet/bubbletea"
-	gh "github.com/kraft/approver/internal/github"
 )
 
 // trackedIssue is a minimal record for a manually-tracked issue.
 type trackedIssue struct {
-	Number int `json:"number"`
+	Number int    `json:"number"`
+	Repo   string `json:"repo,omitempty"`
 }
 
 func trackedIssuesFilePath() (string, error) {
@@ -90,25 +88,3 @@ func removeTrackedIssue(issueNumber int) error {
 	}
 	return nil
 }
-
-func fetchTrackedIssuesCmd(repoDir string) tea.Cmd {
-	return func() tea.Msg {
-		tracked, err := loadTrackedIssues()
-		if err != nil {
-			return issuesErrorMsg{err: fmt.Errorf("loading tracked issues: %w", err)}
-		}
-
-		var issues []gh.Issue
-		for _, t := range tracked {
-			issue, err := gh.FetchIssue(repoDir, fmt.Sprintf("%d", t.Number))
-			if err != nil {
-				continue
-			}
-			issue.Source = "manual"
-			issues = append(issues, *issue)
-		}
-
-		return trackedIssuesLoadedMsg{issues: issues}
-	}
-}
-

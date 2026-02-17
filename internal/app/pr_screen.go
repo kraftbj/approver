@@ -44,7 +44,12 @@ func (s *prScreen) HandleKey(h *home, key string) tea.Cmd {
 	case "R":
 		h.loading = true
 		h.state = stateLoading
-		return tea.Batch(h.spinner.Tick, fetchPRsCmd(h.repoDir, h.cfg.PRLimit))
+		var cmds []tea.Cmd
+		cmds = append(cmds, h.spinner.Tick)
+		for _, repo := range h.repos {
+			cmds = append(cmds, fetchPRsCmd(repo.Dir, repo.Name, h.cfg.PRLimit))
+		}
+		return tea.Batch(cmds...)
 
 	case "o":
 		pr := s.prList.SelectedPR()
@@ -55,22 +60,25 @@ func (s *prScreen) HandleKey(h *home, key string) tea.Cmd {
 	case "w":
 		pr := s.prList.SelectedPR()
 		if pr != nil {
-			if _, exists := h.worktrees[pr.Number]; exists {
+			k := PRKey(pr)
+			if _, exists := h.worktrees[k]; exists {
 				h.showError(fmt.Sprintf("Worktree already exists for PR #%d", pr.Number))
 				return clearErrorAfter(3 * time.Second)
 			}
-			if h.creatingWorktrees[pr.Number] {
+			if h.creatingWorktrees[k] {
 				return nil
 			}
-			h.creatingWorktrees[pr.Number] = true
+			h.creatingWorktrees[k] = true
 			h.reconcileWorktrees()
-			return tea.Batch(h.spinner.Tick, createWorktreeCmd(h.wtManager, pr.Number, pr.HeadRefName))
+			mgr := h.wtManagerForKey(k)
+			return tea.Batch(h.spinner.Tick, createWorktreeCmd(mgr, k, pr.HeadRefName))
 		}
 
 	case "W":
 		pr := s.prList.SelectedPR()
 		if pr != nil {
-			if _, exists := h.worktrees[pr.Number]; !exists {
+			k := PRKey(pr)
+			if _, exists := h.worktrees[k]; !exists {
 				h.showError(fmt.Sprintf("No worktree for PR #%d", pr.Number))
 				return clearErrorAfter(3 * time.Second)
 			}
@@ -84,25 +92,26 @@ func (s *prScreen) HandleKey(h *home, key string) tea.Cmd {
 		if pr == nil {
 			return nil
 		}
+		k := PRKey(pr)
 		if !claude.CheckClaude() {
 			h.showError("claude CLI not found on PATH")
 			return clearErrorAfter(3 * time.Second)
 		}
-		if _, exists := h.worktrees[pr.Number]; !exists {
+		if _, exists := h.worktrees[k]; !exists {
 			h.showError(fmt.Sprintf("No worktree for PR #%d — create one first with w", pr.Number))
 			return clearErrorAfter(3 * time.Second)
 		}
-		if _, running := h.fixing[pr.Number]; running {
+		if _, running := h.fixing[k]; running {
 			h.showError("Fix agent already running")
 			return clearErrorAfter(3 * time.Second)
 		}
 
 		// Build fix items from both sources
 		var items []claude.FixItem
-		if review, ok := h.reviews[pr.Number]; ok {
+		if review, ok := h.reviews[k]; ok {
 			items = append(items, claude.FixItemsFromReview(review)...)
 		}
-		if comments, ok := h.comments[pr.Number]; ok {
+		if comments, ok := h.comments[k]; ok {
 			items = append(items, claude.FixItemsFromComments(comments)...)
 		}
 		if len(items) == 0 {
@@ -123,8 +132,9 @@ func (s *prScreen) HandleKey(h *home, key string) tea.Cmd {
 			s.detailMode = detailComments
 			pr := s.prList.SelectedPR()
 			if pr != nil {
-				if _, ok := h.comments[pr.Number]; !ok {
-					return fetchCommentsCmd(h.repoDir, pr.Number)
+				k := PRKey(pr)
+				if _, ok := h.comments[k]; !ok {
+					return fetchCommentsCmd(pr.RepoDir, k)
 				}
 			}
 		case detailComments:
@@ -138,35 +148,38 @@ func (s *prScreen) HandleKey(h *home, key string) tea.Cmd {
 		if pr == nil {
 			return nil
 		}
+		k := PRKey(pr)
 		if !claude.CheckClaude() {
 			h.showError("claude CLI not found on PATH")
 			return clearErrorAfter(3 * time.Second)
 		}
-		if cancel, running := h.reviewing[pr.Number]; running {
+		if cancel, running := h.reviewing[k]; running {
 			cancel()
-			delete(h.reviewing, pr.Number)
-			delete(h.reviewStep, pr.Number)
+			delete(h.reviewing, k)
+			delete(h.reviewStep, k)
 			h.reconcileClaudeState()
 			return nil
 		}
-		wtPath, exists := h.worktrees[pr.Number]
+		wtPath, exists := h.worktrees[k]
 		if !exists {
-			if h.creatingWorktrees[pr.Number] {
+			if h.creatingWorktrees[k] {
 				return nil
 			}
 			h.pending = pendingReview
-			h.pendingPR = pr.Number
-			h.creatingWorktrees[pr.Number] = true
+			h.pendingKey = k
+			h.creatingWorktrees[k] = true
 			h.reconcileWorktrees()
-			return tea.Batch(h.spinner.Tick, createWorktreeCmd(h.wtManager, pr.Number, pr.HeadRefName))
+			mgr := h.wtManagerForKey(k)
+			return tea.Batch(h.spinner.Tick, createWorktreeCmd(mgr, k, pr.HeadRefName))
 		}
-		return h.startReview(pr.Number, wtPath)
+		return h.startReview(k, wtPath, pr.RepoDir)
 
 	case "t":
 		pr := s.prList.SelectedPR()
 		if pr == nil {
 			return nil
 		}
+		k := PRKey(pr)
 		if !claude.CheckTmux() {
 			h.showError("tmux not found on PATH")
 			return clearErrorAfter(3 * time.Second)
@@ -175,23 +188,25 @@ func (s *prScreen) HandleKey(h *home, key string) tea.Cmd {
 			h.showError("claude CLI not found on PATH")
 			return clearErrorAfter(3 * time.Second)
 		}
-		wtPath, exists := h.worktrees[pr.Number]
+		wtPath, exists := h.worktrees[k]
 		if !exists {
-			if h.creatingWorktrees[pr.Number] {
+			if h.creatingWorktrees[k] {
 				return nil
 			}
 			h.pending = pendingTmux
-			h.pendingPR = pr.Number
-			h.creatingWorktrees[pr.Number] = true
+			h.pendingKey = k
+			h.creatingWorktrees[k] = true
 			h.reconcileWorktrees()
-			return tea.Batch(h.spinner.Tick, createWorktreeCmd(h.wtManager, pr.Number, pr.HeadRefName))
+			mgr := h.wtManagerForKey(k)
+			return tea.Batch(h.spinner.Tick, createWorktreeCmd(mgr, k, pr.HeadRefName))
 		}
-		return h.startTmux(pr.Number, wtPath)
+		return h.startTmux(k, wtPath)
 
 	case "u":
 		pr := s.prList.SelectedPR()
 		if pr != nil {
-			if _, exists := h.worktrees[pr.Number]; !exists {
+			k := PRKey(pr)
+			if _, exists := h.worktrees[k]; !exists {
 				h.showError(fmt.Sprintf("No worktree for PR #%d — create one first with w", pr.Number))
 				return clearErrorAfter(3 * time.Second)
 			}
@@ -262,11 +277,12 @@ func (s *prScreen) viewDashboard(h *home, height int) string {
 
 	if s.detailMode == detailReview {
 		if pr != nil {
-			_, hasWT := h.worktrees[pr.Number]
-			if _, reviewing := h.reviewing[pr.Number]; reviewing {
-				step := h.reviewStep[pr.Number]
+			k := PRKey(pr)
+			_, hasWT := h.worktrees[k]
+			if _, reviewing := h.reviewing[k]; reviewing {
+				step := h.reviewStep[k]
 				detailView = s.detail.ViewReviewing(pr, h.spinner.View(), step)
-			} else if review, ok := h.reviews[pr.Number]; ok {
+			} else if review, ok := h.reviews[k]; ok {
 				data := &ui.ReviewDisplayData{
 					Checklist:  review.Agent3Out,
 					RawOutput:  review.RawOutput,
@@ -282,20 +298,22 @@ func (s *prScreen) viewDashboard(h *home, height int) string {
 		}
 	} else if s.detailMode == detailComments {
 		if pr != nil {
-			comments := h.comments[pr.Number]
+			k := PRKey(pr)
+			comments := h.comments[k]
 			detailView = s.detail.ViewComments(pr, comments)
 		} else {
 			detailView = s.detail.ViewComments(nil, nil)
 		}
 	} else if s.detailMode == detailFix {
 		if pr != nil {
-			if _, fixing := h.fixing[pr.Number]; fixing {
-				step := h.fixStep[pr.Number]
+			k := PRKey(pr)
+			if _, fixing := h.fixing[k]; fixing {
+				step := h.fixStep[k]
 				detailView = s.detail.ViewFixing(pr, h.spinner.View(), step)
-			} else if output, ok := h.fixResults[pr.Number]; ok {
+			} else if output, ok := h.fixResults[k]; ok {
 				detailView = s.detail.ViewFixResult(pr, output)
 			} else {
-				_, hasWT := h.worktrees[pr.Number]
+				_, hasWT := h.worktrees[k]
 				detailView = s.detail.ViewFixEmpty(pr, hasWT)
 			}
 		} else {

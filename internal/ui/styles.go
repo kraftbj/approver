@@ -53,6 +53,13 @@ var (
 	ManualBadgeStyle = lipgloss.NewStyle().
 				Foreground(ColorCyan)
 
+	MergedBadgeStyle = lipgloss.NewStyle().
+				Foreground(ColorMagenta)
+
+	RepoHeaderStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(ColorDimGray)
+
 	SectionHeaderStyle = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(ColorCyan)

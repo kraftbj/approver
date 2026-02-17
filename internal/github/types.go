@@ -27,6 +27,7 @@ type PR struct {
 	Additions      int            `json:"additions"`
 	Deletions      int            `json:"deletions"`
 	UpdatedAt      time.Time      `json:"updatedAt"`
+	State          string         `json:"state"`
 
 	// Review data
 	ReviewRequests []ReviewRequest `json:"reviewRequests"`
@@ -34,6 +35,12 @@ type PR struct {
 
 	// Comments from the PR, used to populate CommentCount.
 	Comments []Comment `json:"comments"`
+
+	// Repo is the short name of the repository (e.g., "approver").
+	Repo string `json:"-"`
+
+	// RepoDir is the absolute path to the repository on disk.
+	RepoDir string `json:"-"`
 
 	// Source indicates how this PR was added to the list.
 	// "review-requested" for auto-fetched, "manual" for user-added.
@@ -277,6 +284,12 @@ type Issue struct {
 
 	// LinkedPRs are PRs that reference/close this issue.
 	LinkedPRs []LinkedPR `json:"closedByPullRequestsReferences"`
+
+	// Repo is the short name of the repository (e.g., "approver").
+	Repo string `json:"-"`
+
+	// RepoDir is the absolute path to the repository on disk.
+	RepoDir string `json:"-"`
 
 	// Source indicates how this issue was added.
 	// "assigned" for auto-fetched, "manual" for user-added.

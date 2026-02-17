@@ -29,6 +29,9 @@ type Config struct {
 	// Default: 300 (5 minutes). Set to 0 to disable polling.
 	PollInterval *int `yaml:"poll_interval,omitempty"`
 
+	// RepoSources lists repositories to monitor. If empty, falls back to CWD.
+	RepoSources []RepoSource `yaml:"repo_sources,omitempty"`
+
 	// Repos holds per-repository configuration keyed by a substring of the remote URL.
 	Repos map[string]RepoConfig `yaml:"repos,omitempty"`
 }

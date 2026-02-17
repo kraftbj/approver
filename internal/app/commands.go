@@ -15,22 +15,28 @@ import (
 	"github.com/kraft/approver/internal/worktree"
 )
 
-func fetchPRsCmd(repoDir string, limit int) tea.Cmd {
+func fetchPRsCmd(repoDir, repoName string, limit int) tea.Cmd {
 	return func() tea.Msg {
 		prs, err := gh.FetchPRs(repoDir, limit)
 		if err != nil {
 			return prsErrorMsg{err: err}
 		}
+		for i := range prs {
+			prs[i].Repo = repoName
+			prs[i].RepoDir = repoDir
+		}
 		return prsLoadedMsg{prs: prs}
 	}
 }
 
-func fetchSinglePRCmd(repoDir, numberOrURL string) tea.Cmd {
+func fetchSinglePRCmd(repoDir string, key ItemKey, numberOrURL string) tea.Cmd {
 	return func() tea.Msg {
 		pr, err := gh.FetchPR(repoDir, numberOrURL)
 		if err != nil {
 			return prAddErrorMsg{err: err}
 		}
+		pr.Repo = key.Repo
+		pr.RepoDir = repoDir
 		return prAddedMsg{pr: *pr}
 	}
 }
@@ -62,36 +68,44 @@ func openInBrowserCmd(url string) tea.Cmd {
 	}
 }
 
-func createWorktreeCmd(mgr *worktree.Manager, prNumber int, branch string) tea.Cmd {
+func createWorktreeCmd(mgr *worktree.Manager, key ItemKey, branch string) tea.Cmd {
 	return func() tea.Msg {
-		path, err := mgr.Create(prNumber, branch)
+		path, err := mgr.Create(key.Number, branch)
 		if err != nil {
-			return worktreeErrorMsg{prNumber: prNumber, err: err}
+			return worktreeErrorMsg{key: key, err: err}
 		}
-		return worktreeCreatedMsg{prNumber: prNumber, path: path}
+		return worktreeCreatedMsg{key: key, path: path}
 	}
 }
 
-func deleteWorktreeCmd(mgr *worktree.Manager, prNumber int) tea.Cmd {
+func deleteWorktreeCmd(mgr *worktree.Manager, key ItemKey) tea.Cmd {
 	return func() tea.Msg {
-		if err := mgr.Delete(prNumber); err != nil {
-			return worktreeErrorMsg{prNumber: prNumber, err: err}
+		if err := mgr.Delete(key.Number); err != nil {
+			return worktreeErrorMsg{key: key, err: err}
 		}
-		return worktreeDeletedMsg{prNumber: prNumber}
+		return worktreeDeletedMsg{key: key}
 	}
 }
 
-func scanWorktreesCmd(mgr *worktree.Manager) tea.Cmd {
+func scanWorktreesCmd(mgr *worktree.Manager, repoName string) tea.Cmd {
 	return func() tea.Msg {
 		wts, _ := mgr.ScanExisting()
-		return worktreesScanMsg{worktrees: wts}
+		result := make(map[ItemKey]string, len(wts))
+		for num, path := range wts {
+			result[ItemKey{Repo: repoName, Number: num}] = path
+		}
+		return worktreesScanMsg{repo: repoName, worktrees: result}
 	}
 }
 
-func scanIssueWorktreesCmd(mgr *worktree.Manager) tea.Cmd {
+func scanIssueWorktreesCmd(mgr *worktree.Manager, repoName string) tea.Cmd {
 	return func() tea.Msg {
 		wts, _ := mgr.ScanIssueWorktrees()
-		return issueWorktreesScanMsg{worktrees: wts}
+		result := make(map[ItemKey]string, len(wts))
+		for num, path := range wts {
+			result[ItemKey{Repo: repoName, Number: num}] = path
+		}
+		return issueWorktreesScanMsg{repo: repoName, worktrees: result}
 	}
 }
 
@@ -101,23 +115,27 @@ func pollTick(intervalSeconds int) tea.Cmd {
 	})
 }
 
-func pollPRsCmd(repoDir string, limit int) tea.Cmd {
+func pollPRsCmd(repoDir, repoName string, limit int) tea.Cmd {
 	return func() tea.Msg {
 		prs, err := gh.FetchPRs(repoDir, limit)
 		if err != nil {
 			return nil
 		}
+		for i := range prs {
+			prs[i].Repo = repoName
+			prs[i].RepoDir = repoDir
+		}
 		return pollPRsLoadedMsg{prs: prs}
 	}
 }
 
-func fetchCommentsCmd(repoDir string, prNumber int) tea.Cmd {
+func fetchCommentsCmd(repoDir string, key ItemKey) tea.Cmd {
 	return func() tea.Msg {
-		comments, err := gh.FetchComments(repoDir, prNumber)
+		comments, err := gh.FetchComments(repoDir, key.Number)
 		if err != nil {
-			return commentsErrorMsg{prNumber: prNumber, err: err}
+			return commentsErrorMsg{key: key, err: err}
 		}
-		return commentsLoadedMsg{prNumber: prNumber, comments: comments}
+		return commentsLoadedMsg{key: key, comments: comments}
 	}
 }
 
@@ -130,7 +148,7 @@ func removeTrackedPRCmd(prNumber int) tea.Cmd {
 	}
 }
 
-func runClaudeReviewCmd(ctx context.Context, cfg *config.Config, prNumber int, worktreePath, repoDir string) tea.Cmd {
+func runClaudeReviewCmd(ctx context.Context, cfg *config.Config, key ItemKey, worktreePath, repoDir string) tea.Cmd {
 	return func() tea.Msg {
 		prompt := ""
 		allowedTools := ""
@@ -138,11 +156,11 @@ func runClaudeReviewCmd(ctx context.Context, cfg *config.Config, prNumber int, w
 			prompt = cfg.ReviewPrompt
 			allowedTools = cfg.AllowedTools
 		}
-		result, err := claude.RunReviewPipeline(ctx, worktreePath, repoDir, prNumber, prompt, allowedTools, nil)
+		result, err := claude.RunReviewPipeline(ctx, worktreePath, repoDir, key.Number, prompt, allowedTools, nil)
 		if err != nil {
-			return claudeReviewErrorMsg{prNumber: prNumber, err: err}
+			return claudeReviewErrorMsg{key: key, err: err}
 		}
-		return claudeReviewDoneMsg{prNumber: prNumber, review: *result}
+		return claudeReviewDoneMsg{key: key, review: *result}
 	}
 }
 
@@ -165,59 +183,59 @@ func reviewSpinnerTick() tea.Cmd {
 	})
 }
 
-func updateBranchCmd(wtPath, baseBranch string, prNumber int) tea.Cmd {
+func updateBranchCmd(wtPath, baseBranch string, key ItemKey) tea.Cmd {
 	return func() tea.Msg {
 		fetchCmd := exec.Command("git", "-C", wtPath, "fetch", "origin", "--", baseBranch)
 		if out, err := fetchCmd.CombinedOutput(); err != nil {
-			return branchUpdateErrorMsg{prNumber: prNumber, err: fmt.Errorf("fetch: %s", string(out))}
+			return branchUpdateErrorMsg{key: key, err: fmt.Errorf("fetch: %s", string(out))}
 		}
 		mergeCmd := exec.Command("git", "-C", wtPath, "merge", "--", fmt.Sprintf("origin/%s", baseBranch))
 		if out, err := mergeCmd.CombinedOutput(); err != nil {
-			return branchUpdateErrorMsg{prNumber: prNumber, err: fmt.Errorf("merge: %s", string(out))}
+			return branchUpdateErrorMsg{key: key, err: fmt.Errorf("merge: %s", string(out))}
 		}
-		return branchUpdatedMsg{prNumber: prNumber}
+		return branchUpdatedMsg{key: key}
 	}
 }
 
-func pushBranchCmd(wtPath string, prNumber int) tea.Cmd {
+func pushBranchCmd(wtPath string, key ItemKey) tea.Cmd {
 	return func() tea.Msg {
 		cmd := exec.Command("git", "-C", wtPath, "push", "origin", "HEAD")
 		if out, err := cmd.CombinedOutput(); err != nil {
-			return branchPushErrorMsg{prNumber: prNumber, err: fmt.Errorf("%s", string(out))}
+			return branchPushErrorMsg{key: key, err: fmt.Errorf("%s", string(out))}
 		}
-		return branchPushedMsg{prNumber: prNumber}
+		return branchPushedMsg{key: key}
 	}
 }
 
-func requestChangesPRCmd(repoDir string, prNumber int, body string) tea.Cmd {
+func requestChangesPRCmd(repoDir string, key ItemKey, body string) tea.Cmd {
 	return func() tea.Msg {
-		cmd := exec.Command("gh", "pr", "review", fmt.Sprintf("%d", prNumber), "--request-changes", "--body", body)
+		cmd := exec.Command("gh", "pr", "review", fmt.Sprintf("%d", key.Number), "--request-changes", "--body", body)
 		if repoDir != "" {
 			cmd.Dir = repoDir
 		}
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			return prChangesRequestErrorMsg{prNumber: prNumber, err: fmt.Errorf("%s", string(out))}
+			return prChangesRequestErrorMsg{key: key, err: fmt.Errorf("%s", string(out))}
 		}
-		return prChangesRequestedMsg{prNumber: prNumber}
+		return prChangesRequestedMsg{key: key}
 	}
 }
 
-func approvePRCmd(repoDir string, prNumber int) tea.Cmd {
+func approvePRCmd(repoDir string, key ItemKey) tea.Cmd {
 	return func() tea.Msg {
-		cmd := exec.Command("gh", "pr", "review", fmt.Sprintf("%d", prNumber), "--approve")
+		cmd := exec.Command("gh", "pr", "review", fmt.Sprintf("%d", key.Number), "--approve")
 		if repoDir != "" {
 			cmd.Dir = repoDir
 		}
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			return prApproveErrorMsg{prNumber: prNumber, err: fmt.Errorf("%s", string(out))}
+			return prApproveErrorMsg{key: key, err: fmt.Errorf("%s", string(out))}
 		}
-		return prApprovedMsg{prNumber: prNumber}
+		return prApprovedMsg{key: key}
 	}
 }
 
-func runFixCmd(ctx context.Context, cfg *config.Config, prNumber int, worktreePath string, items []claude.FixItem) tea.Cmd {
+func runFixCmd(ctx context.Context, cfg *config.Config, key ItemKey, worktreePath string, items []claude.FixItem) tea.Cmd {
 	return func() tea.Msg {
 		allowedTools := ""
 		if cfg != nil {
@@ -225,31 +243,31 @@ func runFixCmd(ctx context.Context, cfg *config.Config, prNumber int, worktreePa
 		}
 		output, err := claude.RunFixAgent(ctx, worktreePath, items, allowedTools, nil)
 		if err != nil {
-			return fixErrorMsg{prNumber: prNumber, err: err}
+			return fixErrorMsg{key: key, err: err}
 		}
-		return fixDoneMsg{prNumber: prNumber, output: output}
+		return fixDoneMsg{key: key, output: output}
 	}
 }
 
-func fixCommitPushCmd(wtPath string, prNumber int) tea.Cmd {
+func fixCommitPushCmd(wtPath string, key ItemKey) tea.Cmd {
 	return func() tea.Msg {
 		addCmd := exec.Command("git", "-C", wtPath, "add", "-A")
 		if out, err := addCmd.CombinedOutput(); err != nil {
-			return fixCommitPushErrorMsg{prNumber: prNumber, err: fmt.Errorf("git add: %s", string(out))}
+			return fixCommitPushErrorMsg{key: key, err: fmt.Errorf("git add: %s", string(out))}
 		}
 
-		commitMsg := fmt.Sprintf("Fix review findings for PR #%d", prNumber)
+		commitMsg := fmt.Sprintf("Fix review findings for PR #%d", key.Number)
 		commitCmd := exec.Command("git", "-C", wtPath, "commit", "-m", commitMsg)
 		if out, err := commitCmd.CombinedOutput(); err != nil {
-			return fixCommitPushErrorMsg{prNumber: prNumber, err: fmt.Errorf("git commit: %s", string(out))}
+			return fixCommitPushErrorMsg{key: key, err: fmt.Errorf("git commit: %s", string(out))}
 		}
 
 		pushCmd := exec.Command("git", "-C", wtPath, "push", "origin", "HEAD")
 		if out, err := pushCmd.CombinedOutput(); err != nil {
-			return fixCommitPushErrorMsg{prNumber: prNumber, err: fmt.Errorf("git push: %s", string(out))}
+			return fixCommitPushErrorMsg{key: key, err: fmt.Errorf("git push: %s", string(out))}
 		}
 
-		return fixCommitPushDoneMsg{prNumber: prNumber}
+		return fixCommitPushDoneMsg{key: key}
 	}
 }
 
@@ -268,14 +286,14 @@ func fixSpinnerTick() tea.Cmd {
 	})
 }
 
-func runSetupCmd(wtPath, setupCommand string, prNumber int) tea.Cmd {
+func runSetupCmd(wtPath, setupCommand string, key ItemKey) tea.Cmd {
 	return func() tea.Msg {
 		cmd := exec.Command("sh", "-c", setupCommand)
 		cmd.Dir = wtPath
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			return setupErrorMsg{prNumber: prNumber, err: fmt.Errorf("%s: %s", err, string(out))}
+			return setupErrorMsg{key: key, err: fmt.Errorf("%s: %s", err, string(out))}
 		}
-		return setupDoneMsg{prNumber: prNumber, wtPath: wtPath}
+		return setupDoneMsg{key: key, wtPath: wtPath}
 	}
 }
