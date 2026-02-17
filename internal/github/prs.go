@@ -50,7 +50,8 @@ func FetchPRs(repoDir string, limit int) ([]PR, error) {
 
 // FetchPR fetches a single PR by number or URL.
 func FetchPR(repoDir string, numberOrURL string) (*PR, error) {
-	cmd := exec.Command("gh", "pr", "view", "--", numberOrURL,
+	numberOrURL = strings.TrimSpace(numberOrURL)
+	cmd := exec.Command("gh", "pr", "view", numberOrURL,
 		"--json", ghPRFields,
 	)
 	if repoDir != "" {
