@@ -2,9 +2,11 @@ package app
 
 import (
 	"fmt"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/kraft/approver/internal/claude"
 	"github.com/kraft/approver/internal/config"
 	gh "github.com/kraft/approver/internal/github"
 	"github.com/kraft/approver/internal/ui"
@@ -61,6 +63,69 @@ func (s *watchlistScreen) HandleKey(h *home, key string) tea.Cmd {
 		h.inputPrompt = "Add PR to watchlist (number or URL): "
 		h.inputBuffer = ""
 
+	case "w":
+		pr := s.prList.SelectedPR()
+		if pr != nil {
+			k := PRKey(pr)
+			if _, exists := h.worktrees[k]; exists {
+				h.showError(fmt.Sprintf("Worktree already exists for PR #%d", pr.Number))
+				return clearErrorAfter(3 * time.Second)
+			}
+			if h.creatingWorktrees[k] {
+				return nil
+			}
+			h.creatingWorktrees[k] = true
+			h.reconcileWorktrees()
+			mgr := h.wtManagerForKey(k)
+			return tea.Batch(h.spinner.Tick, createWorktreeCmd(mgr, k, pr.HeadRefName))
+		}
+
+	case "c":
+		pr := s.prList.SelectedPR()
+		if pr == nil {
+			return nil
+		}
+		if !claude.CheckClaude() {
+			h.showError("claude CLI not found on PATH")
+			return clearErrorAfter(3 * time.Second)
+		}
+		// Move PR to reviews screen and start review there.
+		h.addPRToList(*pr)
+		h.active = screenReviews
+		// Select the PR in the reviews list.
+		for i, p := range h.pr.prList.PRs {
+			if p.Number == pr.Number && p.Repo == pr.Repo {
+				h.pr.prList.Selected = i
+				break
+			}
+		}
+		// Trigger review via the PR screen's handler.
+		return h.pr.HandleKey(h, "c")
+
+	case "t":
+		pr := s.prList.SelectedPR()
+		if pr == nil {
+			return nil
+		}
+		if !claude.CheckTmux() {
+			h.showError("tmux not found on PATH")
+			return clearErrorAfter(3 * time.Second)
+		}
+		if !claude.CheckClaude() {
+			h.showError("claude CLI not found on PATH")
+			return clearErrorAfter(3 * time.Second)
+		}
+		// Move PR to reviews screen and start tmux there.
+		h.addPRToList(*pr)
+		h.active = screenReviews
+		for i, p := range h.pr.prList.PRs {
+			if p.Number == pr.Number && p.Repo == pr.Repo {
+				h.pr.prList.Selected = i
+				break
+			}
+		}
+		return h.pr.HandleKey(h, "t")
+
 	case "d":
 		pr := s.prList.SelectedPR()
 		if pr != nil {
@@ -88,6 +153,9 @@ func (s *watchlistScreen) Hints() []ui.KeyHint {
 		{Key: "j/k", Desc: "navigate"},
 		{Key: "a", Desc: "add"},
 		{Key: "d", Desc: "remove"},
+		{Key: "c", Desc: "review"},
+		{Key: "t", Desc: "tmux"},
+		{Key: "w", Desc: "worktree"},
 		{Key: "o", Desc: "open"},
 		{Key: "R", Desc: "refresh"},
 		{Key: "?", Desc: "help"},
