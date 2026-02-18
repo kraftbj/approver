@@ -265,6 +265,16 @@ type fixCommitPushErrorMsg struct {
 // fixSpinnerTickMsg rotates the fun fix spinner messages.
 type fixSpinnerTickMsg struct{}
 
+// reviewSavedMsg is sent when a review has been saved to a file.
+type reviewSavedMsg struct {
+	path string
+}
+
+// reviewSaveErrorMsg is sent when saving a review to a file fails.
+type reviewSaveErrorMsg struct {
+	err error
+}
+
 // configSavedMsg is sent when the config has been saved to disk.
 type configSavedMsg struct{}
 

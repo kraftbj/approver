@@ -641,6 +641,14 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.showError(fmt.Sprintf("Failed to add item: %v", msg.err))
 		cmds = append(cmds, clearErrorAfter(3*time.Second))
 
+	case reviewSavedMsg:
+		h.showInfo(fmt.Sprintf("Review saved to %s", msg.path))
+		cmds = append(cmds, clearErrorAfter(3*time.Second))
+
+	case reviewSaveErrorMsg:
+		h.showError(fmt.Sprintf("Failed to save review: %v", msg.err))
+		cmds = append(cmds, clearErrorAfter(3*time.Second))
+
 	case configSavedMsg:
 		// Config saved successfully, nothing extra to do
 

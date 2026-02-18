@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -298,6 +300,46 @@ var funFixMessages = []string{
 	"Making it right...",
 	"Surgeon at work...",
 	"Almost done fixing...",
+}
+
+func saveReviewToFileCmd(pr gh.PR, review claude.ReviewResult) tea.Cmd {
+	return func() tea.Msg {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return reviewSaveErrorMsg{err: err}
+		}
+		dir := filepath.Join(home, "Desktop")
+		if _, err := os.Stat(dir); err != nil {
+			dir = home
+		}
+
+		filename := fmt.Sprintf("review-pr-%d.md", pr.Number)
+		path := filepath.Join(dir, filename)
+
+		var b strings.Builder
+		b.WriteString(fmt.Sprintf("# Review: PR #%d — %s\n\n", pr.Number, pr.Title))
+		b.WriteString(fmt.Sprintf("- **Repo:** %s\n", pr.Repo))
+		b.WriteString(fmt.Sprintf("- **Author:** %s\n", pr.Author))
+		b.WriteString(fmt.Sprintf("- **URL:** %s\n", pr.URL))
+		b.WriteString(fmt.Sprintf("- **Issues found:** %d (%d high)\n\n", review.IssueCount(), review.HighSeverityCount()))
+
+		if review.Agent3Out != "" {
+			b.WriteString("## Checklist\n\n")
+			b.WriteString(review.Agent3Out)
+			b.WriteString("\n\n")
+		}
+
+		if review.RawOutput != "" {
+			b.WriteString("## Full Output\n\n")
+			b.WriteString(review.RawOutput)
+			b.WriteString("\n")
+		}
+
+		if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+			return reviewSaveErrorMsg{err: err}
+		}
+		return reviewSavedMsg{path: path}
+	}
 }
 
 func saveConfigCmd(cfg *config.Config) tea.Cmd {

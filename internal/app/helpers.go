@@ -61,6 +61,7 @@ func (h *home) viewHelp(height int) string {
     X              Request changes (with reason)
     u              Update branch (merge base into worktree)
     F              Fix review findings (select + agent)
+    S              Save review to markdown file
 
   Issues:
     w              Create worktree for selected issue

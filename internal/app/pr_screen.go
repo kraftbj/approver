@@ -132,6 +132,19 @@ func (s *prScreen) HandleKey(h *home, key string) tea.Cmd {
 		h.fixCursor = 0
 		h.state = stateFixSelect
 
+	case "S":
+		pr := s.prList.SelectedPR()
+		if pr == nil {
+			return nil
+		}
+		k := PRKey(pr)
+		review, ok := h.reviews[k]
+		if !ok {
+			h.showError("No review to save — run a review first (c)")
+			return clearErrorAfter(3 * time.Second)
+		}
+		return saveReviewToFileCmd(*pr, review)
+
 	case "tab":
 		switch s.detailMode {
 		case detailInfo:
@@ -282,6 +295,7 @@ func (s *prScreen) Hints() []ui.KeyHint {
 		{Key: "c", Desc: "review"},
 		{Key: "F", Desc: "fix"},
 		{Key: "t", Desc: "tmux"},
+		{Key: "S", Desc: "save review"},
 		{Key: "A", Desc: "approve"},
 		{Key: "a", Desc: "add"},
 		{Key: "d", Desc: "remove"},
