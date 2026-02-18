@@ -74,3 +74,4 @@
 - ~~**Optimistic Approval State**~~ - Done. After approving a PR, the review decision badge flips to APPROVED immediately; the background re-fetch confirms the state
 - **Inline Comment Drafting** - File/line browser UX for posting inline review comments
 - **Watchlist: Issues** - Track issues alongside PRs in the watchlist
+- **GitHub Enterprise** - Support GHE instances (requires user to `gh auth login` to their GHE host; auth setup is out of scope)
