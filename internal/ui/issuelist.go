@@ -11,11 +11,13 @@ import (
 
 // IssueList is the left panel showing the list of issues.
 type IssueList struct {
-	Issues   []gh.Issue
-	Selected int
-	Width    int
-	Height   int
-	Offset   int
+	Issues       []gh.Issue
+	Selected     int
+	Width        int
+	Height       int
+	Offset       int
+	displayOrder []int
+	LoadingMsg   string
 }
 
 func NewIssueList() IssueList {
@@ -32,21 +34,58 @@ func (l *IssueList) SetIssues(issues []gh.Issue) {
 	if l.Selected >= len(issues) {
 		l.Selected = max(0, len(issues)-1)
 	}
+	l.RebuildDisplayOrder()
 	l.clampScroll()
 }
 
-func (l *IssueList) MoveUp() {
-	if l.Selected > 0 {
-		l.Selected--
-		l.clampScroll()
+// RebuildDisplayOrder rebuilds the display-order mapping for grouped views.
+func (l *IssueList) RebuildDisplayOrder() {
+	if !l.multiRepo() {
+		l.displayOrder = nil
+		return
+	}
+	repos := l.repoGroups()
+	l.displayOrder = l.displayOrder[:0:0]
+	for _, repo := range repos {
+		for i, issue := range l.Issues {
+			if issue.Repo == repo {
+				l.displayOrder = append(l.displayOrder, i)
+			}
+		}
 	}
 }
 
-func (l *IssueList) MoveDown() {
-	if l.Selected < len(l.Issues)-1 {
-		l.Selected++
-		l.clampScroll()
+func (l *IssueList) MoveUp() {
+	if len(l.displayOrder) > 0 {
+		pos := l.displayPos()
+		if pos > 0 {
+			l.Selected = l.displayOrder[pos-1]
+		}
+	} else if l.Selected > 0 {
+		l.Selected--
 	}
+	l.clampScroll()
+}
+
+func (l *IssueList) MoveDown() {
+	if len(l.displayOrder) > 0 {
+		pos := l.displayPos()
+		if pos < len(l.displayOrder)-1 {
+			l.Selected = l.displayOrder[pos+1]
+		}
+	} else if l.Selected < len(l.Issues)-1 {
+		l.Selected++
+	}
+	l.clampScroll()
+}
+
+func (l *IssueList) displayPos() int {
+	for i, idx := range l.displayOrder {
+		if idx == l.Selected {
+			return i
+		}
+	}
+	return 0
 }
 
 func (l *IssueList) SelectedIssue() *gh.Issue {
@@ -119,7 +158,11 @@ func (l *IssueList) View() string {
 }
 
 func (l *IssueList) viewFlat(contentWidth int) string {
-	visibleItems := l.Height / linesPerItem
+	availHeight := l.Height
+	if l.LoadingMsg != "" {
+		availHeight--
+	}
+	visibleItems := availHeight / linesPerItem
 	if visibleItems < 1 {
 		visibleItems = 1
 	}
@@ -132,6 +175,10 @@ func (l *IssueList) viewFlat(contentWidth int) string {
 
 		line1, line2 := l.renderIssueItem(issue, isSelected, contentWidth)
 		lines = append(lines, line1, line2)
+	}
+
+	if l.LoadingMsg != "" {
+		lines = append(lines, DimStyle.Render("  "+l.LoadingMsg))
 	}
 
 	content := strings.Join(lines, "\n")
@@ -165,6 +212,9 @@ func (l *IssueList) viewGrouped(contentWidth int) string {
 	}
 
 	availLines := l.Height
+	if l.LoadingMsg != "" {
+		availLines--
+	}
 	var lines []string
 
 	startRow := selectedRow
@@ -203,6 +253,10 @@ func (l *IssueList) viewGrouped(contentWidth int) string {
 			lines = append(lines, line1, line2)
 			usedLines += linesPerItem
 		}
+	}
+
+	if l.LoadingMsg != "" {
+		lines = append(lines, DimStyle.Render("  "+l.LoadingMsg))
 	}
 
 	content := strings.Join(lines, "\n")

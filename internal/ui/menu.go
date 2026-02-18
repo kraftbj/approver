@@ -84,6 +84,15 @@ func FixSelectHints() []KeyHint {
 	}
 }
 
+// RepoSelectHints returns keybindings during repo selection.
+func RepoSelectHints() []KeyHint {
+	return []KeyHint{
+		{"j/k", "navigate"},
+		{"enter", "select"},
+		{"esc", "cancel"},
+	}
+}
+
 // InputHints returns keybindings during text input.
 func InputHints() []KeyHint {
 	return []KeyHint{

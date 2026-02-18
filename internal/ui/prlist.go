@@ -11,11 +11,13 @@ import (
 
 // PRList is the left panel showing the list of PRs.
 type PRList struct {
-	PRs      []gh.PR
-	Selected int
-	Width    int
-	Height   int
-	Offset   int // scroll offset (in PR indices)
+	PRs          []gh.PR
+	Selected     int
+	Width        int
+	Height       int
+	Offset       int   // scroll offset (in PR indices)
+	displayOrder []int // maps display position → PR index (for grouped view navigation)
+	LoadingMsg   string // when non-empty, shown at bottom of list panel
 }
 
 func NewPRList() PRList {
@@ -34,23 +36,63 @@ func (l *PRList) SetPRs(prs []gh.PR) {
 	if l.Selected >= len(prs) {
 		l.Selected = max(0, len(prs)-1)
 	}
+	l.RebuildDisplayOrder()
 	l.clampScroll()
 }
 
-// MoveUp moves selection up one item.
-func (l *PRList) MoveUp() {
-	if l.Selected > 0 {
-		l.Selected--
-		l.clampScroll()
+// RebuildDisplayOrder rebuilds the display-order mapping.
+// In multi-repo mode, PRs are grouped by repo (alphabetical), so the display
+// order differs from the insertion order in l.PRs.
+func (l *PRList) RebuildDisplayOrder() {
+	if !l.multiRepo() {
+		l.displayOrder = nil
+		return
+	}
+	repos := l.repoGroups()
+	l.displayOrder = l.displayOrder[:0:0]
+	for _, repo := range repos {
+		for i, pr := range l.PRs {
+			if pr.Repo == repo {
+				l.displayOrder = append(l.displayOrder, i)
+			}
+		}
 	}
 }
 
-// MoveDown moves selection down one item.
-func (l *PRList) MoveDown() {
-	if l.Selected < len(l.PRs)-1 {
-		l.Selected++
-		l.clampScroll()
+// MoveUp moves selection up one item in display order.
+func (l *PRList) MoveUp() {
+	if len(l.displayOrder) > 0 {
+		pos := l.displayPos()
+		if pos > 0 {
+			l.Selected = l.displayOrder[pos-1]
+		}
+	} else if l.Selected > 0 {
+		l.Selected--
 	}
+	l.clampScroll()
+}
+
+// MoveDown moves selection down one item in display order.
+func (l *PRList) MoveDown() {
+	if len(l.displayOrder) > 0 {
+		pos := l.displayPos()
+		if pos < len(l.displayOrder)-1 {
+			l.Selected = l.displayOrder[pos+1]
+		}
+	} else if l.Selected < len(l.PRs)-1 {
+		l.Selected++
+	}
+	l.clampScroll()
+}
+
+// displayPos returns the current position of Selected within displayOrder.
+func (l *PRList) displayPos() int {
+	for i, idx := range l.displayOrder {
+		if idx == l.Selected {
+			return i
+		}
+	}
+	return 0
 }
 
 // SelectedPR returns the currently selected PR, or nil if empty.
@@ -132,7 +174,11 @@ func (l *PRList) View() string {
 
 // viewFlat renders the list without repo headers (single-repo mode).
 func (l *PRList) viewFlat(contentWidth int) string {
-	visibleItems := l.Height / linesPerItem
+	availHeight := l.Height
+	if l.LoadingMsg != "" {
+		availHeight--
+	}
+	visibleItems := availHeight / linesPerItem
 	if visibleItems < 1 {
 		visibleItems = 1
 	}
@@ -145,6 +191,10 @@ func (l *PRList) viewFlat(contentWidth int) string {
 
 		line1, line2 := l.renderPRItem(pr, isSelected, contentWidth)
 		lines = append(lines, line1, line2)
+	}
+
+	if l.LoadingMsg != "" {
+		lines = append(lines, DimStyle.Render("  "+l.LoadingMsg))
 	}
 
 	content := strings.Join(lines, "\n")
@@ -182,6 +232,9 @@ func (l *PRList) viewGrouped(contentWidth int) string {
 
 	// Compute visible window in display lines
 	availLines := l.Height
+	if l.LoadingMsg != "" {
+		availLines--
+	}
 	var lines []string
 
 	// Scroll: start from a row such that the selected row is visible.
@@ -226,6 +279,10 @@ func (l *PRList) viewGrouped(contentWidth int) string {
 			lines = append(lines, line1, line2)
 			usedLines += linesPerItem
 		}
+	}
+
+	if l.LoadingMsg != "" {
+		lines = append(lines, DimStyle.Render("  "+l.LoadingMsg))
 	}
 
 	content := strings.Join(lines, "\n")

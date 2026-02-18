@@ -12,8 +12,25 @@ import (
 	"github.com/kraft/approver/internal/ui"
 )
 
+func (h *home) loadingProgress() string {
+	total := 0
+	for _, repo := range h.repos {
+		if repo.HasFeature("prs") {
+			total++
+		}
+		if repo.HasFeature("issues") {
+			total++
+		}
+	}
+	loaded := total - h.pendingFetches
+	if total > 1 {
+		return fmt.Sprintf("Loading... (%d/%d)", loaded, total)
+	}
+	return "Loading..."
+}
+
 func (h *home) viewLoading(height int) string {
-	content := fmt.Sprintf("\n\n  %s Fetching PRs...", h.spinner.View())
+	content := fmt.Sprintf("\n\n  %s %s", h.spinner.View(), h.loadingProgress())
 	return lipgloss.NewStyle().Width(h.width).Height(height).Render(content)
 }
 
@@ -143,6 +160,7 @@ func (h *home) addPRToList(pr gh.PR) {
 		}
 	}
 	h.pr.prList.PRs = append(h.pr.prList.PRs, pr)
+	h.pr.prList.RebuildDisplayOrder()
 }
 
 func (h *home) removePR(number int) {
@@ -152,6 +170,7 @@ func (h *home) removePR(number int) {
 			if h.pr.prList.Selected >= len(h.pr.prList.PRs) {
 				h.pr.prList.Selected = max(0, len(h.pr.prList.PRs)-1)
 			}
+			h.pr.prList.RebuildDisplayOrder()
 			return
 		}
 	}
@@ -165,6 +184,7 @@ func (h *home) addIssueToList(issue gh.Issue) {
 		}
 	}
 	h.issues.issueList.Issues = append(h.issues.issueList.Issues, issue)
+	h.issues.issueList.RebuildDisplayOrder()
 }
 
 func (h *home) removeIssue(number int) {
@@ -174,6 +194,7 @@ func (h *home) removeIssue(number int) {
 			if h.issues.issueList.Selected >= len(h.issues.issueList.Issues) {
 				h.issues.issueList.Selected = max(0, len(h.issues.issueList.Issues)-1)
 			}
+			h.issues.issueList.RebuildDisplayOrder()
 			return
 		}
 	}
@@ -387,6 +408,56 @@ func (h *home) viewFixSelectOverlay(base string, height int) string {
 		BorderForeground(ui.ColorCyan).
 		Padding(1, 2).
 		Width(h.width - 10).
+		Render(content)
+
+	return placeOverlay(h.width, height, base, overlay)
+}
+
+func (h *home) handleRepoSelectKey(key string) tea.Cmd {
+	switch key {
+	case "j", "down":
+		if h.repoSelectCursor < len(h.repos)-1 {
+			h.repoSelectCursor++
+		}
+	case "k", "up":
+		if h.repoSelectCursor > 0 {
+			h.repoSelectCursor--
+		}
+	case "enter":
+		h.inputRepo = h.repos[h.repoSelectCursor]
+		h.state = stateInput
+		h.inputAction = h.repoSelectAction
+		h.inputPrompt = fmt.Sprintf("[%s] Add PR or issue (number or URL): ", h.inputRepo.Name)
+		h.inputBuffer = ""
+	case "esc":
+		h.state = stateDefault
+	}
+	return nil
+}
+
+func (h *home) viewRepoSelectOverlay(base string, height int) string {
+	var lines []string
+	lines = append(lines, ui.SectionHeaderStyle.Render("Select repository"))
+	lines = append(lines, "")
+
+	for i, repo := range h.repos {
+		cursor := "  "
+		if i == h.repoSelectCursor {
+			cursor = "> "
+		}
+		line := fmt.Sprintf("%s%s", cursor, repo.Name)
+		if i == h.repoSelectCursor {
+			lines = append(lines, ui.SelectedStyle.Render(line))
+		} else {
+			lines = append(lines, line)
+		}
+	}
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	overlay := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ui.ColorCyan).
+		Padding(1, 2).
 		Render(content)
 
 	return placeOverlay(h.width, height, base, overlay)

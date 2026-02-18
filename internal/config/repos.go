@@ -11,18 +11,33 @@ import (
 // RepoSource is a user-configured repository location.
 // Either Path (single repo) or ScanDir (directory of repos) should be set.
 type RepoSource struct {
-	Path    string            `yaml:"path,omitempty"`
-	ScanDir string            `yaml:"scan_dir,omitempty"`
-	Host    string            `yaml:"host,omitempty"`
-	Env     map[string]string `yaml:"env,omitempty"`
+	Path     string            `yaml:"path,omitempty"`
+	ScanDir  string            `yaml:"scan_dir,omitempty"`
+	Host     string            `yaml:"host,omitempty"`
+	Env      map[string]string `yaml:"env,omitempty"`
+	Features []string          `yaml:"features,omitempty"`
 }
+
+// DefaultFeatures is the set of features enabled when none are configured.
+var DefaultFeatures = []string{"prs", "issues"}
 
 // RepoEntry is a resolved repository with its name and absolute directory.
 type RepoEntry struct {
-	Name string
-	Dir  string
-	Host string
-	Env  map[string]string
+	Name     string
+	Dir      string
+	Host     string
+	Env      map[string]string
+	Features []string
+}
+
+// HasFeature returns true if the given feature (e.g. "prs", "issues") is enabled.
+func (r RepoEntry) HasFeature(feature string) bool {
+	for _, f := range r.Features {
+		if f == feature {
+			return true
+		}
+	}
+	return false
 }
 
 // ResolveRepoDirs resolves a list of RepoSource entries into deduplicated RepoEntry values.
@@ -32,6 +47,11 @@ func ResolveRepoDirs(sources []RepoSource) ([]RepoEntry, error) {
 	var entries []RepoEntry
 
 	for _, src := range sources {
+		features := src.Features
+		if len(features) == 0 {
+			features = DefaultFeatures
+		}
+
 		if src.Path != "" {
 			dir, err := expandPath(src.Path)
 			if err != nil {
@@ -45,10 +65,11 @@ func ResolveRepoDirs(sources []RepoSource) ([]RepoEntry, error) {
 			}
 			seen[dir] = true
 			entries = append(entries, RepoEntry{
-				Name: filepath.Base(dir),
-				Dir:  dir,
-				Host: src.Host,
-				Env:  src.Env,
+				Name:     filepath.Base(dir),
+				Dir:      dir,
+				Host:     src.Host,
+				Env:      src.Env,
+				Features: features,
 			})
 		} else if src.ScanDir != "" {
 			scanDir, err := expandPath(src.ScanDir)
@@ -72,10 +93,11 @@ func ResolveRepoDirs(sources []RepoSource) ([]RepoEntry, error) {
 				}
 				seen[dir] = true
 				entries = append(entries, RepoEntry{
-					Name: child.Name(),
-					Dir:  dir,
-					Host: src.Host,
-					Env:  src.Env,
+					Name:     child.Name(),
+					Dir:      dir,
+					Host:     src.Host,
+					Env:      src.Env,
+					Features: features,
 				})
 			}
 		}

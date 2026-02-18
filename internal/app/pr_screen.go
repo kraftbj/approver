@@ -44,10 +44,18 @@ func (s *prScreen) HandleKey(h *home, key string) tea.Cmd {
 	case "R":
 		h.loading = true
 		h.state = stateLoading
+		h.pendingFetches = 0
 		var cmds []tea.Cmd
 		cmds = append(cmds, h.spinner.Tick)
 		for _, repo := range h.repos {
-			cmds = append(cmds, fetchPRsCmd(repo.Dir, repo.Name, h.cfg.PRLimit))
+			if repo.HasFeature("prs") {
+				cmds = append(cmds, fetchPRsCmd(repo.Dir, repo.Name, h.cfg.PRLimit))
+				h.pendingFetches++
+			}
+			if repo.HasFeature("issues") {
+				cmds = append(cmds, fetchIssuesCmd(repo.Dir, repo.Name, h.cfg.PRLimit))
+				h.pendingFetches++
+			}
 		}
 		return tea.Batch(cmds...)
 
@@ -233,10 +241,17 @@ func (s *prScreen) HandleKey(h *home, key string) tea.Cmd {
 		}
 
 	case "a":
-		h.state = stateInput
-		h.inputAction = inputAddItem
-		h.inputPrompt = "Add PR or issue (number or URL): "
-		h.inputBuffer = ""
+		if len(h.repos) > 1 {
+			h.repoSelectCursor = 0
+			h.repoSelectAction = inputAddItem
+			h.state = stateRepoSelect
+		} else {
+			h.inputRepo = h.repos[0]
+			h.state = stateInput
+			h.inputAction = inputAddItem
+			h.inputPrompt = "Add PR or issue (number or URL): "
+			h.inputBuffer = ""
+		}
 
 	case "d":
 		pr := s.prList.SelectedPR()
@@ -292,6 +307,12 @@ func (s *prScreen) viewDashboard(h *home, height int) string {
 
 	s.prList.SetSize(listWidth, height)
 	s.detail.SetSize(detailWidth, height)
+
+	if h.loading {
+		s.prList.LoadingMsg = h.loadingProgress()
+	} else {
+		s.prList.LoadingMsg = ""
+	}
 
 	listView := s.prList.View()
 

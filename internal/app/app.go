@@ -21,12 +21,13 @@ import (
 type state int
 
 const (
-	stateDefault   state = iota
+	stateDefault    state = iota
 	stateLoading
 	stateConfirm
 	stateHelp
 	stateInput
-	stateFixSelect // Finding selection overlay for fix agent
+	stateFixSelect  // Finding selection overlay for fix agent
+	stateRepoSelect // Repo picker for manual add
 )
 
 // detailMode controls what the right panel displays.
@@ -94,6 +95,9 @@ type home struct {
 	spinner spinner.Model
 	loading bool
 
+	// Loading state
+	pendingFetches int
+
 	// Confirmation state
 	confirmMsg    string
 	confirmAction confirmAction
@@ -102,6 +106,7 @@ type home struct {
 	inputBuffer string
 	inputPrompt string
 	inputAction inputAction
+	inputRepo   config.RepoEntry // repo context for the current input
 
 	// Repository configuration
 	repoDir    string               // Primary repo (CWD fallback for single-repo mode)
@@ -154,6 +159,10 @@ type home struct {
 	fixResults  map[ItemKey]string             // Fix agent output
 	fixMsgIdx   int                           // Fun fix spinner rotation
 
+	// Repo selection state (for manual add with multi-repo)
+	repoSelectCursor int
+	repoSelectAction inputAction // what to do after repo is chosen
+
 	// Config
 	cfg *config.Config
 }
@@ -198,11 +207,15 @@ func (h home) Init() tea.Cmd {
 	for _, repo := range h.repos {
 		repoName := repo.Name
 		repoDir := repo.Dir
-		debug.Log("[Init]   repo=%q dir=%q host=%q", repoName, repoDir, repo.Host)
-		cmds = append(cmds,
-			fetchPRsCmd(repoDir, repoName, h.cfg.PRLimit),
-			fetchIssuesCmd(repoDir, repoName, h.cfg.PRLimit),
-		)
+		debug.Log("[Init]   repo=%q dir=%q host=%q features=%v", repoName, repoDir, repo.Host, repo.Features)
+		if repo.HasFeature("prs") {
+			cmds = append(cmds, fetchPRsCmd(repoDir, repoName, h.cfg.PRLimit))
+			h.pendingFetches++
+		}
+		if repo.HasFeature("issues") {
+			cmds = append(cmds, fetchIssuesCmd(repoDir, repoName, h.cfg.PRLimit))
+			h.pendingFetches++
+		}
 		if mgr, ok := h.wtManagers[repoName]; ok {
 			cmds = append(cmds, scanWorktreesCmd(mgr, repoName), scanIssueWorktreesCmd(mgr, repoName))
 		}
@@ -233,8 +246,14 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case prsLoadedMsg:
-		h.loading = false
-		h.state = stateDefault
+		h.pendingFetches--
+		if h.pendingFetches <= 0 {
+			h.pendingFetches = 0
+			h.loading = false
+			if h.state == stateLoading {
+				h.state = stateDefault
+			}
+		}
 		filtered := filterExcludedPRs(msg.prs)
 		debug.Log("[prsLoadedMsg] received %d PRs (%d after exclude filter)", len(msg.prs), len(filtered))
 		for _, pr := range filtered {
@@ -258,8 +277,14 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.reconcileWorktrees()
 
 	case prsErrorMsg:
-		h.loading = false
-		h.state = stateDefault
+		h.pendingFetches--
+		if h.pendingFetches <= 0 {
+			h.pendingFetches = 0
+			h.loading = false
+			if h.state == stateLoading {
+				h.state = stateDefault
+			}
+		}
 		debug.Log("[prsErrorMsg] %v", msg.err)
 		h.showError(fmt.Sprintf("Failed to fetch PRs: %v", msg.err))
 		cmds = append(cmds, clearErrorAfter(3*time.Second))
@@ -438,7 +463,9 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case pollTickMsg:
 		if !h.loading {
 			for _, repo := range h.repos {
-				cmds = append(cmds, pollPRsCmd(repo.Dir, repo.Name, h.cfg.PRLimit))
+				if repo.HasFeature("prs") {
+					cmds = append(cmds, pollPRsCmd(repo.Dir, repo.Name, h.cfg.PRLimit))
+				}
 			}
 		} else if h.cfg != nil && *h.cfg.PollInterval > 0 {
 			cmds = append(cmds, pollTick(*h.cfg.PollInterval))
@@ -489,9 +516,13 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case issuesLoadedMsg:
 		h.issues.loaded = true
-		if h.active == screenIssues && h.loading {
+		h.pendingFetches--
+		if h.pendingFetches <= 0 {
+			h.pendingFetches = 0
 			h.loading = false
-			h.state = stateDefault
+			if h.state == stateLoading {
+				h.state = stateDefault
+			}
 		}
 		for _, issue := range filterExcludedIssues(msg.issues) {
 			h.addIssueToList(issue)
@@ -508,9 +539,13 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.reconcileIssueTmuxSessions()
 
 	case issuesErrorMsg:
-		if h.active == screenIssues && h.loading {
+		h.pendingFetches--
+		if h.pendingFetches <= 0 {
+			h.pendingFetches = 0
 			h.loading = false
-			h.state = stateDefault
+			if h.state == stateLoading {
+				h.state = stateDefault
+			}
 		}
 		h.showError(fmt.Sprintf("Failed to fetch issues: %v", msg.err))
 		cmds = append(cmds, clearErrorAfter(3*time.Second))
@@ -643,11 +678,15 @@ func (h *home) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case stateFixSelect:
 		return h.handleFixSelectKey(key)
 
+	case stateRepoSelect:
+		return h.handleRepoSelectKey(key)
+
 	case stateLoading:
 		if key == "q" {
 			return tea.Quit
 		}
-		return nil
+		// Allow normal key handling while loading (e.g. press 'a' to add)
+		return h.handleDefaultKey(key)
 
 	default:
 		return h.handleDefaultKey(key)
@@ -748,14 +787,8 @@ func (h *home) handleInputKey(msg tea.KeyMsg) tea.Cmd {
 		if h.inputBuffer != "" {
 			input := h.inputBuffer
 			h.inputBuffer = ""
-			// Use first repo as default for manual adds
-			defaultRepo := ""
-			defaultDir := h.repoDir
-			if len(h.repos) > 0 {
-				defaultRepo = h.repos[0].Name
-				defaultDir = h.repos[0].Dir
-			}
-			defaultKey := ItemKey{Repo: defaultRepo}
+			repo := h.inputRepo
+			key := ItemKey{Repo: repo.Name}
 			switch h.inputAction {
 			case inputRequestChanges:
 				pr := h.pr.prList.SelectedPR()
@@ -766,12 +799,12 @@ func (h *home) handleInputKey(msg tea.KeyMsg) tea.Cmd {
 				return nil
 			case inputAddIssue:
 				h.state = stateDefault
-				return fetchSingleIssueCmd(defaultDir, defaultKey, input)
+				return fetchSingleIssueCmd(repo.Dir, key, input)
 			case inputAddItem:
 				h.state = stateDefault
-				return detectAndFetchItemCmd(defaultDir, defaultKey, input)
+				return detectAndFetchItemCmd(repo.Dir, key, input)
 			default:
-				return fetchSinglePRCmd(defaultDir, defaultKey, input)
+				return fetchSinglePRCmd(repo.Dir, key, input)
 			}
 		}
 		h.state = stateDefault
@@ -820,6 +853,8 @@ func (h home) View() string {
 		mainContent = h.viewInputOverlay(mainContent, panelHeight)
 	} else if h.state == stateFixSelect {
 		mainContent = h.viewFixSelectOverlay(mainContent, panelHeight)
+	} else if h.state == stateRepoSelect {
+		mainContent = h.viewRepoSelectOverlay(mainContent, panelHeight)
 	}
 
 	// Menu bar with screen indicator
@@ -832,6 +867,8 @@ func (h home) View() string {
 		hints = ui.InputHints()
 	case stateFixSelect:
 		hints = ui.FixSelectHints()
+	case stateRepoSelect:
+		hints = ui.RepoSelectHints()
 	default:
 		switch h.active {
 		case screenReviews:
@@ -920,7 +957,7 @@ func Run() error {
 		}
 		debug.Log("[Run] CWD fallback: dir=%q", repoDir)
 		h.repoDir = repoDir
-		h.repos = []config.RepoEntry{{Name: filepath.Base(repoDir), Dir: repoDir}}
+		h.repos = []config.RepoEntry{{Name: filepath.Base(repoDir), Dir: repoDir, Features: config.DefaultFeatures}}
 	}
 
 	// Register per-repo environment variables (e.g. HTTPS_PROXY for GHE)
