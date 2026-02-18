@@ -342,6 +342,31 @@ func TestFetchComments(t *testing.T) {
 	}
 }
 
+func TestParseHostFromRemote(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"SSH github.com", "git@github.com:org/repo.git", "github.com"},
+		{"SSH GHE", "git@github.example.com:org/repo.git", "github.example.com"},
+		{"HTTPS github.com", "https://github.com/org/repo.git", "github.com"},
+		{"HTTPS GHE", "https://github.example.com/org/repo.git", "github.example.com"},
+		{"HTTPS without .git", "https://github.com/org/repo", "github.com"},
+		{"empty string", "", DefaultHost},
+		{"garbage", "not-a-url", DefaultHost},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseHostFromRemote(tt.input)
+			if got != tt.expected {
+				t.Errorf("ParseHostFromRemote(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestRelativeTime(t *testing.T) {
 	now := time.Now()
 

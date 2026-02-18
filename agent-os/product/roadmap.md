@@ -69,9 +69,24 @@
 - **Persistence namespacing** - Review files stored under `reviews/{repoName}/`; tracked PRs/issues carry `repo` field; backward-compatible loading of old flat files
 - **Merged PR detection** - `state` field on PRs; purple `M` badge on merged watchlist PRs; auto-removal on second poll cycle with worktree cleanup
 
+## Phase 10: GitHub Enterprise Support [DONE]
+
+- **Per-host auth** - Detect host from git remote, validate `gh auth token --hostname` per host; replaces single-host `CheckGH()`
+- **GHE search compat** - Split `OR` search queries into separate calls and merge results (GHE doesn't support boolean `OR`)
+- **Per-repo env config** - `env:` map on repo sources for proxy/auth settings (e.g. `HTTPS_PROXY` for SOCKS tunnels)
+- **Centralized command builder** - `GHCommand()` helper applies repo dir + env to all `gh` invocations
+- **Host auto-detection** - `ParseHostFromRemote()` extracts hostname from SSH/HTTPS remote URLs
+- **Debug logging** - `--debug` flag writes structured logs to `~/.config/approver/debug.log`
+
 ## Future
-- ~~**Review Word Wrap**~~ - Done. Review output, comments, and issue descriptions now word-wrap to fit the detail panel width
-- ~~**Optimistic Approval State**~~ - Done. After approving a PR, the review decision badge flips to APPROVED immediately; the background re-fetch confirms the state
+- ~~**Review Word Wrap**~~ - Done
+- ~~**Optimistic Approval State**~~ - Done
 - **Inline Comment Drafting** - File/line browser UX for posting inline review comments
 - **Watchlist: Issues** - Track issues alongside PRs in the watchlist
-- **GitHub Enterprise** - Support GHE instances (requires user to `gh auth login` to their GHE host; auth setup is out of scope)
+- **Settings UI** - In-app configuration for repos, hosts, and per-repo env
+
+## Known Bugs
+
+1. **No way to mark repos with disabled issues/PRs** - When a repo has issues or PRs disabled, the fetch errors are silent. Need a way to flag this in `repo_sources` (e.g. `features: [prs]` or `features: [issues]`)
+2. **Multi-repo scroll order inverted** - List groups repos top-to-bottom but cursor wrapping goes bottom-to-top. Can't scroll down from one repo group to the next; must wrap around from the top
+3. **Incremental loading is janky** - Repos load one at a time with no progress indication. Each `prsLoadedMsg` flips `loading=false` so the spinner stops after the first repo. Need a loading counter or "N of M repos loaded" indicator

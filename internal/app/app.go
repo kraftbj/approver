@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/kraft/approver/internal/claude"
 	"github.com/kraft/approver/internal/config"
+	"github.com/kraft/approver/internal/debug"
 	gh "github.com/kraft/approver/internal/github"
 	"github.com/kraft/approver/internal/ui"
 	"github.com/kraft/approver/internal/worktree"
@@ -193,9 +194,11 @@ func (h home) Init() tea.Cmd {
 	var cmds []tea.Cmd
 	cmds = append(cmds, h.spinner.Tick, loadReviewsCmd())
 
+	debug.Log("[Init] dispatching fetch commands for %d repos", len(h.repos))
 	for _, repo := range h.repos {
 		repoName := repo.Name
 		repoDir := repo.Dir
+		debug.Log("[Init]   repo=%q dir=%q host=%q", repoName, repoDir, repo.Host)
 		cmds = append(cmds,
 			fetchPRsCmd(repoDir, repoName, h.cfg.PRLimit),
 			fetchIssuesCmd(repoDir, repoName, h.cfg.PRLimit),
@@ -232,7 +235,13 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case prsLoadedMsg:
 		h.loading = false
 		h.state = stateDefault
-		h.pr.prList.SetPRs(filterExcludedPRs(msg.prs))
+		filtered := filterExcludedPRs(msg.prs)
+		debug.Log("[prsLoadedMsg] received %d PRs (%d after exclude filter)", len(msg.prs), len(filtered))
+		for _, pr := range filtered {
+			debug.Log("[prsLoadedMsg]   adding PR #%d %q repo=%q", pr.Number, pr.Title, pr.Repo)
+			h.addPRToList(pr)
+		}
+		debug.Log("[prsLoadedMsg] total PRs in list: %d", len(h.pr.prList.PRs))
 		h.reconcileWorktrees()
 		h.takeSnapshots()
 		// Fetch tracked PRs to merge into the list
@@ -251,6 +260,7 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case prsErrorMsg:
 		h.loading = false
 		h.state = stateDefault
+		debug.Log("[prsErrorMsg] %v", msg.err)
 		h.showError(fmt.Sprintf("Failed to fetch PRs: %v", msg.err))
 		cmds = append(cmds, clearErrorAfter(3*time.Second))
 
@@ -867,7 +877,8 @@ func (h *home) wtManagerForKey(key ItemKey) *worktree.Manager {
 }
 
 func Run() error {
-	if err := gh.CheckGH(); err != nil {
+	debug.Log("[Run] starting approver")
+	if err := gh.CheckGHInstalled(); err != nil {
 		return err
 	}
 
@@ -882,12 +893,20 @@ func Run() error {
 
 	// Resolve repos: from config or fall back to CWD
 	if cfg != nil && len(cfg.RepoSources) > 0 {
+		debug.Log("[Run] resolving %d repo sources from config", len(cfg.RepoSources))
+		for i, src := range cfg.RepoSources {
+			debug.Log("[Run]   source[%d]: path=%q scan_dir=%q host=%q", i, src.Path, src.ScanDir, src.Host)
+		}
 		repos, err := config.ResolveRepoDirs(cfg.RepoSources)
 		if err != nil {
 			return fmt.Errorf("resolving repo sources: %w", err)
 		}
 		if len(repos) == 0 {
 			return fmt.Errorf("no valid git repositories found in repo_sources")
+		}
+		debug.Log("[Run] resolved %d repos", len(repos))
+		for i, r := range repos {
+			debug.Log("[Run]   repo[%d]: name=%q dir=%q host=%q", i, r.Name, r.Dir, r.Host)
 		}
 		h.repos = repos
 		h.repoDir = repos[0].Dir
@@ -899,8 +918,47 @@ func Run() error {
 		if err := gh.CheckGitRepo(repoDir); err != nil {
 			return err
 		}
+		debug.Log("[Run] CWD fallback: dir=%q", repoDir)
 		h.repoDir = repoDir
 		h.repos = []config.RepoEntry{{Name: filepath.Base(repoDir), Dir: repoDir}}
+	}
+
+	// Register per-repo environment variables (e.g. HTTPS_PROXY for GHE)
+	for _, repo := range h.repos {
+		if len(repo.Env) > 0 {
+			debug.Log("[Run] registering env for %q: %v", repo.Name, repo.Env)
+			gh.SetRepoEnv(repo.Dir, repo.Env)
+		}
+	}
+
+	// Auto-detect host from git remote for repos without an explicit host
+	for i := range h.repos {
+		if h.repos[i].Host == "" {
+			remoteURL, err := gh.ParseRepoFromDir(h.repos[i].Dir)
+			debug.Log("[Run] auto-detect host for %q: remoteURL=%q err=%v", h.repos[i].Name, remoteURL, err)
+			if err == nil {
+				h.repos[i].Host = gh.ParseHostFromRemote(remoteURL)
+			} else {
+				h.repos[i].Host = gh.DefaultHost
+			}
+			debug.Log("[Run]   => host=%q", h.repos[i].Host)
+		} else {
+			debug.Log("[Run] host already set for %q: %q", h.repos[i].Name, h.repos[i].Host)
+		}
+	}
+
+	// Verify gh auth for each unique host
+	hostSeen := make(map[string]bool)
+	var hosts []string
+	for _, repo := range h.repos {
+		if !hostSeen[repo.Host] {
+			hostSeen[repo.Host] = true
+			hosts = append(hosts, repo.Host)
+		}
+	}
+	debug.Log("[Run] unique hosts to auth-check: %v", hosts)
+	if err := gh.CheckGHHosts(hosts); err != nil {
+		return err
 	}
 
 	// Create per-repo worktree managers

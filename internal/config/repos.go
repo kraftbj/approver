@@ -11,14 +11,18 @@ import (
 // RepoSource is a user-configured repository location.
 // Either Path (single repo) or ScanDir (directory of repos) should be set.
 type RepoSource struct {
-	Path    string `yaml:"path,omitempty"`
-	ScanDir string `yaml:"scan_dir,omitempty"`
+	Path    string            `yaml:"path,omitempty"`
+	ScanDir string            `yaml:"scan_dir,omitempty"`
+	Host    string            `yaml:"host,omitempty"`
+	Env     map[string]string `yaml:"env,omitempty"`
 }
 
 // RepoEntry is a resolved repository with its name and absolute directory.
 type RepoEntry struct {
 	Name string
 	Dir  string
+	Host string
+	Env  map[string]string
 }
 
 // ResolveRepoDirs resolves a list of RepoSource entries into deduplicated RepoEntry values.
@@ -43,6 +47,8 @@ func ResolveRepoDirs(sources []RepoSource) ([]RepoEntry, error) {
 			entries = append(entries, RepoEntry{
 				Name: filepath.Base(dir),
 				Dir:  dir,
+				Host: src.Host,
+				Env:  src.Env,
 			})
 		} else if src.ScanDir != "" {
 			scanDir, err := expandPath(src.ScanDir)
@@ -68,6 +74,8 @@ func ResolveRepoDirs(sources []RepoSource) ([]RepoEntry, error) {
 				entries = append(entries, RepoEntry{
 					Name: child.Name(),
 					Dir:  dir,
+					Host: src.Host,
+					Env:  src.Env,
 				})
 			}
 		}

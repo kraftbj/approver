@@ -11,20 +11,24 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/kraft/approver/internal/claude"
 	"github.com/kraft/approver/internal/config"
+	"github.com/kraft/approver/internal/debug"
 	gh "github.com/kraft/approver/internal/github"
 	"github.com/kraft/approver/internal/worktree"
 )
 
 func fetchPRsCmd(repoDir, repoName string, limit int) tea.Cmd {
 	return func() tea.Msg {
+		debug.Log("[fetchPRsCmd] start repo=%q dir=%q limit=%d", repoName, repoDir, limit)
 		prs, err := gh.FetchPRs(repoDir, limit)
 		if err != nil {
-			return prsErrorMsg{err: err}
+			debug.Log("[fetchPRsCmd] ERROR repo=%q: %v", repoName, err)
+			return prsErrorMsg{err: fmt.Errorf("%s: %w", repoName, err)}
 		}
 		for i := range prs {
 			prs[i].Repo = repoName
 			prs[i].RepoDir = repoDir
 		}
+		debug.Log("[fetchPRsCmd] done repo=%q returned %d PRs", repoName, len(prs))
 		return prsLoadedMsg{prs: prs}
 	}
 }
@@ -231,10 +235,7 @@ func pushBranchCmd(wtPath string, key ItemKey) tea.Cmd {
 
 func requestChangesPRCmd(repoDir string, key ItemKey, body string) tea.Cmd {
 	return func() tea.Msg {
-		cmd := exec.Command("gh", "pr", "review", fmt.Sprintf("%d", key.Number), "--request-changes", "--body", body)
-		if repoDir != "" {
-			cmd.Dir = repoDir
-		}
+		cmd := gh.GHCommand(repoDir, "pr", "review", fmt.Sprintf("%d", key.Number), "--request-changes", "--body", body)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return prChangesRequestErrorMsg{key: key, err: fmt.Errorf("%s", string(out))}
@@ -245,10 +246,7 @@ func requestChangesPRCmd(repoDir string, key ItemKey, body string) tea.Cmd {
 
 func approvePRCmd(repoDir string, key ItemKey) tea.Cmd {
 	return func() tea.Msg {
-		cmd := exec.Command("gh", "pr", "review", fmt.Sprintf("%d", key.Number), "--approve")
-		if repoDir != "" {
-			cmd.Dir = repoDir
-		}
+		cmd := gh.GHCommand(repoDir, "pr", "review", fmt.Sprintf("%d", key.Number), "--approve")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return prApproveErrorMsg{key: key, err: fmt.Errorf("%s", string(out))}
