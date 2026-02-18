@@ -113,15 +113,36 @@ func LoadConfig() *Config {
 	return cfg
 }
 
+// SaveConfig writes the full config to ~/.config/approver/config.yaml.
+func SaveConfig(cfg *Config) error {
+	cfgPath, err := configPath()
+	if err != nil {
+		return err
+	}
+
+	out, err := yaml.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		return fmt.Errorf("creating config dir: %w", err)
+	}
+	if err := os.WriteFile(cfgPath, out, 0o644); err != nil {
+		return fmt.Errorf("writing config: %w", err)
+	}
+	return nil
+}
+
 // AddRepoSource adds a path-based repo source to the config file.
 // It skips duplicates and validates the path is a git repository.
 func AddRepoSource(repoPath string) error {
-	absPath, err := expandPath(repoPath)
+	absPath, err := ExpandPath(repoPath)
 	if err != nil {
 		return fmt.Errorf("resolving path %q: %w", repoPath, err)
 	}
 
-	if !isGitRepo(absPath) {
+	if !IsGitRepo(absPath) {
 		return fmt.Errorf("%q is not a git repository", absPath)
 	}
 
@@ -139,7 +160,7 @@ func AddRepoSource(repoPath string) error {
 
 	// Check for duplicates.
 	for _, src := range cfg.RepoSources {
-		resolved, err := expandPath(src.Path)
+		resolved, err := ExpandPath(src.Path)
 		if err == nil && resolved == absPath {
 			fmt.Printf("Already tracked: %s\n", absPath)
 			return nil

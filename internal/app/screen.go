@@ -4,6 +4,7 @@ package app
 type activeScreen int
 
 const (
-	screenReviews activeScreen = iota
+	screenReviews  activeScreen = iota
 	screenIssues
+	screenSettings
 )

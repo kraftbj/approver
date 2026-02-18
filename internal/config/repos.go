@@ -53,14 +53,14 @@ func ResolveRepoDirs(sources []RepoSource) ([]RepoEntry, error) {
 		}
 
 		if src.Path != "" {
-			dir, err := expandPath(src.Path)
+			dir, err := ExpandPath(src.Path)
 			if err != nil {
 				return nil, fmt.Errorf("expanding path %q: %w", src.Path, err)
 			}
 			if seen[dir] {
 				continue
 			}
-			if !isGitRepo(dir) {
+			if !IsGitRepo(dir) {
 				return nil, fmt.Errorf("%q is not a git repository", dir)
 			}
 			seen[dir] = true
@@ -72,7 +72,7 @@ func ResolveRepoDirs(sources []RepoSource) ([]RepoEntry, error) {
 				Features: features,
 			})
 		} else if src.ScanDir != "" {
-			scanDir, err := expandPath(src.ScanDir)
+			scanDir, err := ExpandPath(src.ScanDir)
 			if err != nil {
 				return nil, fmt.Errorf("expanding scan_dir %q: %w", src.ScanDir, err)
 			}
@@ -88,7 +88,7 @@ func ResolveRepoDirs(sources []RepoSource) ([]RepoEntry, error) {
 				if seen[dir] {
 					continue
 				}
-				if !isGitRepo(dir) {
+				if !IsGitRepo(dir) {
 					continue
 				}
 				seen[dir] = true
@@ -106,7 +106,8 @@ func ResolveRepoDirs(sources []RepoSource) ([]RepoEntry, error) {
 	return entries, nil
 }
 
-func expandPath(p string) (string, error) {
+// ExpandPath resolves ~ and returns an absolute path.
+func ExpandPath(p string) (string, error) {
 	if strings.HasPrefix(p, "~/") {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -117,7 +118,8 @@ func expandPath(p string) (string, error) {
 	return filepath.Abs(p)
 }
 
-func isGitRepo(dir string) bool {
+// IsGitRepo returns true if the given directory is a git repository.
+func IsGitRepo(dir string) bool {
 	cmd := exec.Command("git", "rev-parse", "--git-dir")
 	cmd.Dir = dir
 	return cmd.Run() == nil

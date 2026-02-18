@@ -28,7 +28,7 @@ func (m *Menu) SetWidth(w int) {
 }
 
 // screenNames maps screen index to display name.
-var screenNames = []string{"PRs", "Issues"}
+var screenNames = []string{"PRs", "Issues", "Settings"}
 
 // ScreenIndicator renders the screen switcher like "[1:PRs] 2:Issues".
 func ScreenIndicator(activeIdx int) string {
@@ -90,6 +90,19 @@ func RepoSelectHints() []KeyHint {
 		{"j/k", "navigate"},
 		{"enter", "select"},
 		{"esc", "cancel"},
+	}
+}
+
+// SettingsHints returns keybindings for the settings screen.
+func SettingsHints() []KeyHint {
+	return []KeyHint{
+		{"h/l", "category"},
+		{"j/k", "navigate"},
+		{"enter", "edit"},
+		{"a", "add repo"},
+		{"d", "remove repo"},
+		{"?", "help"},
+		{"q", "quit"},
 	}
 }
 

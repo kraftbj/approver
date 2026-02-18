@@ -264,3 +264,11 @@ type fixCommitPushErrorMsg struct {
 
 // fixSpinnerTickMsg rotates the fun fix spinner messages.
 type fixSpinnerTickMsg struct{}
+
+// configSavedMsg is sent when the config has been saved to disk.
+type configSavedMsg struct{}
+
+// configSaveErrorMsg is sent when saving the config fails.
+type configSaveErrorMsg struct {
+	err error
+}

@@ -46,6 +46,7 @@ func (h *home) viewHelp(height int) string {
   Screens:
     1              PRs (review-requested + authored + assigned)
     2              Issues (assigned + authored)
+    3              Settings
 
   Navigation:
     j/k, up/down   Navigate list
@@ -66,6 +67,13 @@ func (h *home) viewHelp(height int) string {
     W              Delete worktree (with confirmation)
     c              Start Claude tmux session (auto-creates worktree)
     p              Open linked PR in browser
+
+  Settings:
+    h/l            Switch category
+    j/k            Navigate items
+    Enter          Edit field / expand repo
+    a              Add repo source
+    d              Remove repo source
 
   Common:
     a              Add PR or issue (auto-detects)

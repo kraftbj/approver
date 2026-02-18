@@ -51,6 +51,7 @@ const (
 	confirmPushBranch
 	confirmDeleteIssueWorktree
 	confirmFixCommitPush
+	confirmDeleteRepo
 )
 
 // inputAction distinguishes what the text input is being used for.
@@ -61,6 +62,8 @@ const (
 	inputRequestChanges                    // Entering reason for request-changes
 	inputAddIssue                          // Adding an issue by number/URL
 	inputAddItem                           // Auto-detect PR vs issue
+	inputSettingsEdit                      // Editing a settings field
+	inputSettingsAddRepo                   // Adding a new repo path
 )
 
 // prSnapshot captures PR state for change detection between polls.
@@ -85,9 +88,10 @@ type home struct {
 	state  state
 
 	// Screen management
-	active activeScreen
-	pr     prScreen
-	issues issueScreen
+	active   activeScreen
+	pr       prScreen
+	issues   issueScreen
+	settings settingsScreen
 
 	// UI components
 	menu    ui.Menu
@@ -177,6 +181,7 @@ func newHome() home {
 		active:                 screenReviews,
 		pr:                     newPRScreen(),
 		issues:                 newIssueScreen(),
+		settings:               newSettingsScreen(),
 		menu:                   ui.NewMenu(),
 		errBox:                 ui.NewErrBox(),
 		spinner:                s,
@@ -636,6 +641,13 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.showError(fmt.Sprintf("Failed to add item: %v", msg.err))
 		cmds = append(cmds, clearErrorAfter(3*time.Second))
 
+	case configSavedMsg:
+		// Config saved successfully, nothing extra to do
+
+	case configSaveErrorMsg:
+		h.showError(fmt.Sprintf("Failed to save config: %v", msg.err))
+		cmds = append(cmds, clearErrorAfter(3*time.Second))
+
 	case cleanupDoneMsg:
 		// Weekly cleanup completed, nothing to do
 
@@ -702,6 +714,10 @@ func (h *home) handleDefaultKey(key string) tea.Cmd {
 	case "2":
 		h.active = screenIssues
 		return nil
+	case "3":
+		h.active = screenSettings
+		h.settings.rebuildItems(h.cfg)
+		return nil
 	}
 
 	// Dispatch to active screen
@@ -710,6 +726,8 @@ func (h *home) handleDefaultKey(key string) tea.Cmd {
 		return h.pr.HandleKey(h, key)
 	case screenIssues:
 		return h.issues.HandleKey(h, key)
+	case screenSettings:
+		return h.settings.HandleKey(h, key)
 	}
 	return nil
 }
@@ -762,6 +780,8 @@ func (h *home) handleConfirmKey(key string) tea.Cmd {
 				wtPath := h.worktrees[k]
 				return fixCommitPushCmd(wtPath, k)
 			}
+		case confirmDeleteRepo:
+			return h.settings.removeRepo(h)
 		}
 	case "n", "esc":
 		if h.confirmAction == confirmFixCommitPush {
@@ -803,6 +823,12 @@ func (h *home) handleInputKey(msg tea.KeyMsg) tea.Cmd {
 			case inputAddItem:
 				h.state = stateDefault
 				return detectAndFetchItemCmd(repo.Dir, key, input)
+			case inputSettingsEdit:
+				h.state = stateDefault
+				return h.settings.applyEdit(h, input)
+			case inputSettingsAddRepo:
+				h.state = stateDefault
+				return h.settings.applyAddRepo(h, input)
 			default:
 				return fetchSinglePRCmd(repo.Dir, key, input)
 			}
@@ -842,6 +868,8 @@ func (h home) View() string {
 		mainContent = h.pr.View(&h, panelHeight)
 	case screenIssues:
 		mainContent = h.issues.View(&h, panelHeight)
+	case screenSettings:
+		mainContent = h.settings.View(&h, panelHeight)
 	}
 
 	// Overlay handling
@@ -875,6 +903,8 @@ func (h home) View() string {
 			hints = h.pr.Hints()
 		case screenIssues:
 			hints = h.issues.Hints()
+		case screenSettings:
+			hints = h.settings.Hints()
 		default:
 			hints = ui.DefaultHints()
 		}

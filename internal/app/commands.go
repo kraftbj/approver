@@ -300,6 +300,15 @@ var funFixMessages = []string{
 	"Almost done fixing...",
 }
 
+func saveConfigCmd(cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		if err := config.SaveConfig(cfg); err != nil {
+			return configSaveErrorMsg{err: err}
+		}
+		return configSavedMsg{}
+	}
+}
+
 func fixSpinnerTick() tea.Cmd {
 	return tea.Tick(4*time.Second, func(time.Time) tea.Msg {
 		return fixSpinnerTickMsg{}
