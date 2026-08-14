@@ -104,3 +104,42 @@ func TestResolveRepoDirs_NotGitRepo(t *testing.T) {
 		t.Fatal("expected error for non-git repo path")
 	}
 }
+
+func TestResolveRepoDirsLenient_SkipsInvalidSources(t *testing.T) {
+	tmp := t.TempDir()
+	repo := filepath.Join(tmp, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initGitRepo(t, repo)
+
+	missing := filepath.Join(tmp, "missing")
+	entries, warnings := ResolveRepoDirsLenient([]RepoSource{
+		{Path: missing},
+		{Path: repo},
+	})
+
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d", len(warnings))
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 valid entry, got %d", len(entries))
+	}
+	if entries[0].Dir != repo {
+		t.Errorf("expected dir %s, got %s", repo, entries[0].Dir)
+	}
+}
+
+func TestResolveRepoDirsLenient_SkipsUnreadableScanDir(t *testing.T) {
+	tmp := t.TempDir()
+	missing := filepath.Join(tmp, "missing")
+
+	entries, warnings := ResolveRepoDirsLenient([]RepoSource{{ScanDir: missing}})
+
+	if len(entries) != 0 {
+		t.Fatalf("expected no entries, got %d", len(entries))
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d", len(warnings))
+	}
+}

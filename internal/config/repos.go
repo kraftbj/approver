@@ -43,8 +43,23 @@ func (r RepoEntry) HasFeature(feature string) bool {
 // ResolveRepoDirs resolves a list of RepoSource entries into deduplicated RepoEntry values.
 // Each path is expanded (~ → home), validated as a git repo, and deduplicated by absolute path.
 func ResolveRepoDirs(sources []RepoSource) ([]RepoEntry, error) {
+	entries, warnings := resolveRepoDirs(sources)
+	if len(warnings) > 0 {
+		return nil, warnings[0]
+	}
+	return entries, nil
+}
+
+// ResolveRepoDirsLenient resolves configured repo sources, skipping invalid
+// source entries and returning a warning for each skipped source.
+func ResolveRepoDirsLenient(sources []RepoSource) ([]RepoEntry, []error) {
+	return resolveRepoDirs(sources)
+}
+
+func resolveRepoDirs(sources []RepoSource) ([]RepoEntry, []error) {
 	seen := make(map[string]bool)
 	var entries []RepoEntry
+	var warnings []error
 
 	for _, src := range sources {
 		features := src.Features
@@ -55,13 +70,15 @@ func ResolveRepoDirs(sources []RepoSource) ([]RepoEntry, error) {
 		if src.Path != "" {
 			dir, err := ExpandPath(src.Path)
 			if err != nil {
-				return nil, fmt.Errorf("expanding path %q: %w", src.Path, err)
+				warnings = append(warnings, fmt.Errorf("expanding path %q: %w", src.Path, err))
+				continue
 			}
 			if seen[dir] {
 				continue
 			}
 			if !IsGitRepo(dir) {
-				return nil, fmt.Errorf("%q is not a git repository", dir)
+				warnings = append(warnings, fmt.Errorf("%q is not a git repository", dir))
+				continue
 			}
 			seen[dir] = true
 			entries = append(entries, RepoEntry{
@@ -74,11 +91,13 @@ func ResolveRepoDirs(sources []RepoSource) ([]RepoEntry, error) {
 		} else if src.ScanDir != "" {
 			scanDir, err := ExpandPath(src.ScanDir)
 			if err != nil {
-				return nil, fmt.Errorf("expanding scan_dir %q: %w", src.ScanDir, err)
+				warnings = append(warnings, fmt.Errorf("expanding scan_dir %q: %w", src.ScanDir, err))
+				continue
 			}
 			children, err := os.ReadDir(scanDir)
 			if err != nil {
-				return nil, fmt.Errorf("reading scan_dir %q: %w", scanDir, err)
+				warnings = append(warnings, fmt.Errorf("reading scan_dir %q: %w", scanDir, err))
+				continue
 			}
 			for _, child := range children {
 				if !child.IsDir() {
@@ -103,7 +122,7 @@ func ResolveRepoDirs(sources []RepoSource) ([]RepoEntry, error) {
 		}
 	}
 
-	return entries, nil
+	return entries, warnings
 }
 
 // ExpandPath resolves ~ and returns an absolute path.
