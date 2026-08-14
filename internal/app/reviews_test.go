@@ -72,3 +72,25 @@ func TestSaveAndLoadReview(t *testing.T) {
 		t.Errorf("Issue[1] file: got %q, want %q", loaded.Issues[1].File, "util.go")
 	}
 }
+
+func TestTrackedRepoMatches(t *testing.T) {
+	tests := []struct {
+		name       string
+		storedRepo string
+		repo       string
+		want       bool
+	}{
+		{name: "same repo", storedRepo: "jetpack", repo: "jetpack", want: true},
+		{name: "legacy stored repo", storedRepo: "", repo: "jetpack", want: true},
+		{name: "legacy requested repo", storedRepo: "jetpack", repo: "", want: true},
+		{name: "different repos", storedRepo: "jetpack", repo: "woocommerce", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := trackedRepoMatches(tt.storedRepo, tt.repo); got != tt.want {
+				t.Fatalf("trackedRepoMatches(%q, %q) = %v, want %v", tt.storedRepo, tt.repo, got, tt.want)
+			}
+		})
+	}
+}

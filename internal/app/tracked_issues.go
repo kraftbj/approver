@@ -58,30 +58,34 @@ func saveTrackedIssues(tracked []trackedIssue) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
-func addTrackedIssue(issueNumber int) error {
-	tracked, err := loadTrackedIssues()
-	if err != nil {
-		return err
-	}
-
-	for _, t := range tracked {
-		if t.Number == issueNumber {
-			return nil
-		}
-	}
-
-	tracked = append(tracked, trackedIssue{Number: issueNumber})
-	return saveTrackedIssues(tracked)
-}
-
-func removeTrackedIssue(issueNumber int) error {
+func addTrackedIssue(issueNumber int, repo string) error {
 	tracked, err := loadTrackedIssues()
 	if err != nil {
 		return err
 	}
 
 	for i, t := range tracked {
-		if t.Number == issueNumber {
+		if t.Number == issueNumber && trackedRepoMatches(t.Repo, repo) {
+			if t.Repo == "" && repo != "" {
+				tracked[i].Repo = repo
+				return saveTrackedIssues(tracked)
+			}
+			return nil
+		}
+	}
+
+	tracked = append(tracked, trackedIssue{Number: issueNumber, Repo: repo})
+	return saveTrackedIssues(tracked)
+}
+
+func removeTrackedIssue(issueNumber int, repo string) error {
+	tracked, err := loadTrackedIssues()
+	if err != nil {
+		return err
+	}
+
+	for i, t := range tracked {
+		if t.Number == issueNumber && trackedRepoMatches(t.Repo, repo) {
 			tracked = append(tracked[:i], tracked[i+1:]...)
 			return saveTrackedIssues(tracked)
 		}

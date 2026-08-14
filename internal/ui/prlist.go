@@ -15,8 +15,8 @@ type PRList struct {
 	Selected     int
 	Width        int
 	Height       int
-	Offset       int   // scroll offset (in PR indices)
-	displayOrder []int // maps display position → PR index (for grouped view navigation)
+	Offset       int    // scroll offset (in PR indices)
+	displayOrder []int  // maps display position → PR index (for grouped view navigation)
 	LoadingMsg   string // when non-empty, shown at bottom of list panel
 }
 
@@ -312,6 +312,9 @@ func (l *PRList) renderPRItem(pr gh.PR, selected bool, width int) (string, strin
 	}
 	if pr.HasTmux {
 		prefix += ManualBadgeStyle.Render("T")
+	}
+	if pr.WorktreeSource == "conductor" {
+		prefix += ManualBadgeStyle.Render("C")
 	}
 	if pr.IsCreatingWorktree {
 		prefix += CIStyle("pending").Render("W")

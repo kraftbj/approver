@@ -3,6 +3,7 @@ package claude
 import (
 	"fmt"
 	"os/exec"
+	"strings"
 )
 
 // TmuxSession represents a tmux session for interactive Claude Code.
@@ -21,6 +22,14 @@ func CheckTmux() bool {
 func NewTmuxSession(prNumber int, worktreePath string) *TmuxSession {
 	return &TmuxSession{
 		Name:         fmt.Sprintf("approver-pr-%d", prNumber),
+		WorktreePath: worktreePath,
+	}
+}
+
+// NewReviewTmuxSession creates a prompted review TmuxSession for the given PR.
+func NewReviewTmuxSession(prNumber int, worktreePath string) *TmuxSession {
+	return &TmuxSession{
+		Name:         fmt.Sprintf("approver-pr-%d-review", prNumber),
 		WorktreePath: worktreePath,
 	}
 }
@@ -45,6 +54,21 @@ func (s *TmuxSession) Create() error {
 	return nil
 }
 
+// CreateWithPrompt starts a new detached tmux session running claude with an initial prompt.
+func (s *TmuxSession) CreateWithPrompt(prompt string) error {
+	command := "claude"
+	if prompt != "" {
+		command += " " + shellQuote(prompt)
+	}
+	cmd := exec.Command("tmux", "new-session", "-d", "-s", s.Name, "-c", s.WorktreePath, command)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("tmux new-session failed: %s", string(out))
+	}
+	exec.Command("tmux", "set-option", "-t", s.Name, "status-right", " Ctrl+b d: back to Approver ").Run()
+	return nil
+}
+
 // AttachCmd returns an exec.Cmd that attaches to the tmux session.
 // Use with tea.ExecProcess to hand off the terminal.
 func (s *TmuxSession) AttachCmd() *exec.Cmd {
@@ -65,4 +89,11 @@ func (s *TmuxSession) Kill() error {
 		return fmt.Errorf("tmux kill-session failed: %s", string(out))
 	}
 	return nil
+}
+
+func shellQuote(value string) string {
+	if value == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }

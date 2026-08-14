@@ -2,6 +2,7 @@ package app
 
 import (
 	"github.com/kraft/approver/internal/claude"
+	"github.com/kraft/approver/internal/conductor"
 	gh "github.com/kraft/approver/internal/github"
 )
 
@@ -78,6 +79,16 @@ type worktreeDeletedMsg struct {
 // worktreeErrorMsg is sent when a worktree operation fails.
 type worktreeErrorMsg struct {
 	key ItemKey
+	err error
+}
+
+// conductorWorkspacesLoadedMsg carries ready workspaces from Conductor.
+type conductorWorkspacesLoadedMsg struct {
+	workspaces []conductor.Workspace
+}
+
+// conductorWorkspacesErrorMsg is sent when optional Conductor scanning fails.
+type conductorWorkspacesErrorMsg struct {
 	err error
 }
 

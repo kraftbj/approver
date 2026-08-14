@@ -140,7 +140,14 @@ func (d *PRDetail) View(pr *gh.PR) string {
 
 	// Worktree status
 	if pr.HasWorktree {
-		sections = append(sections, CIStyle("pass").Render("  Worktree: active"))
+		source := "active"
+		switch pr.WorktreeSource {
+		case "conductor":
+			source = "Conductor"
+		case "approver":
+			source = "Approver"
+		}
+		sections = append(sections, CIStyle("pass").Render(fmt.Sprintf("  Worktree: %s", source)))
 	} else if pr.IsCreatingWorktree {
 		sections = append(sections, CIStyle("pending").Render("  Worktree: creating..."))
 	} else {
@@ -153,8 +160,8 @@ func (d *PRDetail) View(pr *gh.PR) string {
 
 // ReviewDisplayData holds formatted review data for display.
 type ReviewDisplayData struct {
-	Checklist string // Agent 3's full numbered checklist (primary display)
-	RawOutput string // Full combined output
+	Checklist  string // Agent 3's full numbered checklist (primary display)
+	RawOutput  string // Full combined output
 	IssueCount int
 	HighCount  int
 }

@@ -14,6 +14,16 @@ func TestNewTmuxSession_Name(t *testing.T) {
 	}
 }
 
+func TestNewReviewTmuxSession_Name(t *testing.T) {
+	s := NewReviewTmuxSession(42, "/tmp/worktree")
+	if s.Name != "approver-pr-42-review" {
+		t.Errorf("expected name approver-pr-42-review, got %q", s.Name)
+	}
+	if s.WorktreePath != "/tmp/worktree" {
+		t.Errorf("expected path /tmp/worktree, got %q", s.WorktreePath)
+	}
+}
+
 func TestAttachCmd_Args(t *testing.T) {
 	s := NewTmuxSession(99, "/tmp/wt")
 	cmd := s.AttachCmd()
@@ -27,5 +37,13 @@ func TestAttachCmd_Args(t *testing.T) {
 		if args[i] != exp {
 			t.Errorf("arg %d: expected %q, got %q", i, exp, args[i])
 		}
+	}
+}
+
+func TestShellQuote(t *testing.T) {
+	got := shellQuote("/tmp/a repo/branch's")
+	want := "'/tmp/a repo/branch'\\''s'"
+	if got != want {
+		t.Fatalf("shellQuote = %q, want %q", got, want)
 	}
 }

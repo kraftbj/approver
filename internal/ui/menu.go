@@ -54,6 +54,7 @@ func DefaultHints() []KeyHint {
 		{"w", "worktree"},
 		{"c", "review"},
 		{"t", "claude session"},
+		{"T", "review tmux"},
 		{"Tab", "cycle view"},
 		{"R", "refresh"},
 		{"A", "approve"},

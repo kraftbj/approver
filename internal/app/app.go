@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/kraft/approver/internal/claude"
+	"github.com/kraft/approver/internal/conductor"
 	"github.com/kraft/approver/internal/config"
 	"github.com/kraft/approver/internal/debug"
 	gh "github.com/kraft/approver/internal/github"
@@ -21,7 +22,7 @@ import (
 type state int
 
 const (
-	stateDefault    state = iota
+	stateDefault state = iota
 	stateLoading
 	stateConfirm
 	stateHelp
@@ -58,12 +59,12 @@ const (
 type inputAction int
 
 const (
-	inputAddPR          inputAction = iota // Adding a PR by number/URL
-	inputRequestChanges                    // Entering reason for request-changes
-	inputAddIssue                          // Adding an issue by number/URL
-	inputAddItem                           // Auto-detect PR vs issue
-	inputSettingsEdit                      // Editing a settings field
-	inputSettingsAddRepo                   // Adding a new repo path
+	inputAddPR           inputAction = iota // Adding a PR by number/URL
+	inputRequestChanges                     // Entering reason for request-changes
+	inputAddIssue                           // Adding an issue by number/URL
+	inputAddItem                            // Auto-detect PR vs issue
+	inputSettingsEdit                       // Editing a settings field
+	inputSettingsAddRepo                    // Adding a new repo path
 )
 
 // prSnapshot captures PR state for change detection between polls.
@@ -80,6 +81,7 @@ const (
 	pendingNone pendingAction = iota
 	pendingReview
 	pendingTmux
+	pendingReviewTmux
 )
 
 type home struct {
@@ -113,13 +115,15 @@ type home struct {
 	inputRepo   config.RepoEntry // repo context for the current input
 
 	// Repository configuration
-	repoDir    string               // Primary repo (CWD fallback for single-repo mode)
-	repos      []config.RepoEntry   // All configured repositories
+	repoDir    string                       // Primary repo (CWD fallback for single-repo mode)
+	repos      []config.RepoEntry           // All configured repositories
 	wtManagers map[string]*worktree.Manager // Per-repo worktree managers (keyed by repo name)
 
 	// Worktree state
-	worktrees         map[ItemKey]string
-	creatingWorktrees map[ItemKey]bool
+	worktrees           map[ItemKey]string
+	conductorWorktrees  map[ItemKey]string
+	conductorWorkspaces []conductor.Workspace
+	creatingWorktrees   map[ItemKey]bool
 
 	// Claude review state
 	reviews    map[ItemKey]claude.ReviewResult
@@ -133,7 +137,8 @@ type home struct {
 	prSnapshots map[ItemKey]prSnapshot
 
 	// tmux session state
-	tmuxSessions map[ItemKey]*claude.TmuxSession
+	tmuxSessions       map[ItemKey]*claude.TmuxSession
+	reviewTmuxSessions map[ItemKey]*claude.TmuxSession
 
 	// Pending action (deferred until worktree creation completes)
 	pending    pendingAction
@@ -153,15 +158,14 @@ type home struct {
 	pendingIssue    pendingIssueAction
 	pendingIssueKey ItemKey
 
-
 	// Fix agent state
-	fixItems    []claude.FixItem              // Available findings for selection
-	fixSelected []bool                        // Toggle state per item
-	fixCursor   int                           // Cursor position in selection list
+	fixItems    []claude.FixItem               // Available findings for selection
+	fixSelected []bool                         // Toggle state per item
+	fixCursor   int                            // Cursor position in selection list
 	fixing      map[ItemKey]context.CancelFunc // Fix agent in progress
 	fixStep     map[ItemKey]string             // Current fix step text
 	fixResults  map[ItemKey]string             // Fix agent output
-	fixMsgIdx   int                           // Fun fix spinner rotation
+	fixMsgIdx   int                            // Fun fix spinner rotation
 
 	// Repo selection state (for manual add with multi-repo)
 	repoSelectCursor int
@@ -188,6 +192,7 @@ func newHome() home {
 		loading:                true,
 		wtManagers:             make(map[string]*worktree.Manager),
 		worktrees:              make(map[ItemKey]string),
+		conductorWorktrees:     make(map[ItemKey]string),
 		creatingWorktrees:      make(map[ItemKey]bool),
 		reviews:                make(map[ItemKey]claude.ReviewResult),
 		reviewing:              make(map[ItemKey]context.CancelFunc),
@@ -195,6 +200,7 @@ func newHome() home {
 		comments:               make(map[ItemKey][]gh.Comment),
 		prSnapshots:            make(map[ItemKey]prSnapshot),
 		tmuxSessions:           make(map[ItemKey]*claude.TmuxSession),
+		reviewTmuxSessions:     make(map[ItemKey]*claude.TmuxSession),
 		issueWorktrees:         make(map[ItemKey]string),
 		creatingIssueWorktrees: make(map[ItemKey]bool),
 		issueTmuxSessions:      make(map[ItemKey]*claude.TmuxSession),
@@ -206,7 +212,10 @@ func newHome() home {
 
 func (h home) Init() tea.Cmd {
 	var cmds []tea.Cmd
-	cmds = append(cmds, h.spinner.Tick, loadReviewsCmd())
+	cmds = append(cmds, h.spinner.Tick, loadReviewsCmd(), scanConductorWorkspacesCmd())
+	if h.errBox.Message != "" {
+		cmds = append(cmds, clearErrorAfter(8*time.Second))
+	}
 
 	debug.Log("[Init] dispatching fetch commands for %d repos", len(h.repos))
 	for _, repo := range h.repos {
@@ -215,11 +224,9 @@ func (h home) Init() tea.Cmd {
 		debug.Log("[Init]   repo=%q dir=%q host=%q features=%v", repoName, repoDir, repo.Host, repo.Features)
 		if repo.HasFeature("prs") {
 			cmds = append(cmds, fetchPRsCmd(repoDir, repoName, h.cfg.PRLimit))
-			h.pendingFetches++
 		}
 		if repo.HasFeature("issues") {
 			cmds = append(cmds, fetchIssuesCmd(repoDir, repoName, h.cfg.PRLimit))
-			h.pendingFetches++
 		}
 		if mgr, ok := h.wtManagers[repoName]; ok {
 			cmds = append(cmds, scanWorktreesCmd(mgr, repoName), scanIssueWorktreesCmd(mgr, repoName))
@@ -301,7 +308,7 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.worktrees[msg.key] = msg.path
 		delete(h.creatingWorktrees, msg.key)
 		h.reconcileWorktrees()
-		if setupCmd := h.repoSetupCommand(); setupCmd != "" && h.pending != pendingNone && h.pendingKey == msg.key {
+		if setupCmd := h.repoSetupCommand(msg.key); setupCmd != "" && h.pending != pendingNone && h.pendingKey == msg.key {
 			cmds = append(cmds, runSetupCmd(msg.path, setupCmd, msg.key))
 			return h, tea.Batch(cmds...)
 		}
@@ -318,6 +325,10 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			session.Kill()
 			delete(h.tmuxSessions, msg.key)
 		}
+		if session, ok := h.reviewTmuxSessions[msg.key]; ok {
+			session.Kill()
+			delete(h.reviewTmuxSessions, msg.key)
+		}
 		h.reconcileWorktrees()
 		h.reconcileClaudeState()
 
@@ -326,6 +337,13 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.worktrees[k] = v
 		}
 		h.reconcileWorktrees()
+
+	case conductorWorkspacesLoadedMsg:
+		h.conductorWorkspaces = msg.workspaces
+		h.reconcileWorktrees()
+
+	case conductorWorkspacesErrorMsg:
+		debug.Log("[conductorWorkspacesErrorMsg] %v", msg.err)
 
 	case worktreeErrorMsg:
 		if msg.key.Number != 0 {
@@ -340,7 +358,7 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.addPRToList(msg.pr)
 		h.state = stateDefault
 		h.inputBuffer = ""
-		if err := addTrackedPR(msg.pr.Number); err != nil {
+		if err := addTrackedPR(msg.pr.Number, msg.pr.Repo); err != nil {
 			h.showError(fmt.Sprintf("Failed to save tracked PR: %v", err))
 			cmds = append(cmds, clearErrorAfter(3*time.Second))
 		}
@@ -559,7 +577,7 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.addIssueToList(msg.issue)
 		h.state = stateDefault
 		h.inputBuffer = ""
-		if err := addTrackedIssue(msg.issue.Number); err != nil {
+		if err := addTrackedIssue(msg.issue.Number, msg.issue.Repo); err != nil {
 			h.showError(fmt.Sprintf("Failed to save tracked issue: %v", err))
 			cmds = append(cmds, clearErrorAfter(3*time.Second))
 		}
@@ -616,7 +634,7 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					break
 				}
 			}
-			if err := addTrackedPR(msg.pr.Number); err != nil {
+			if err := addTrackedPR(msg.pr.Number, msg.pr.Repo); err != nil {
 				h.showError(fmt.Sprintf("Failed to save tracked PR: %v", err))
 				cmds = append(cmds, clearErrorAfter(3*time.Second))
 			}
@@ -629,7 +647,7 @@ func (h home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					break
 				}
 			}
-			if err := addTrackedIssue(msg.issue.Number); err != nil {
+			if err := addTrackedIssue(msg.issue.Number, msg.issue.Repo); err != nil {
 				h.showError(fmt.Sprintf("Failed to save tracked issue: %v", err))
 				cmds = append(cmds, clearErrorAfter(3*time.Second))
 			}
@@ -764,14 +782,14 @@ func (h *home) handleConfirmKey(key string) tea.Cmd {
 			pr := h.pr.prList.SelectedPR()
 			if pr != nil {
 				k := PRKey(pr)
-				wtPath := h.worktrees[k]
+				wtPath, _, _ := h.worktreePathForKey(k)
 				return updateBranchCmd(wtPath, pr.BaseRefName, k)
 			}
 		case confirmPushBranch:
 			pr := h.pr.prList.SelectedPR()
 			if pr != nil {
 				k := PRKey(pr)
-				wtPath := h.worktrees[k]
+				wtPath, _, _ := h.worktreePathForKey(k)
 				return pushBranchCmd(wtPath, k)
 			}
 		case confirmDeleteIssueWorktree:
@@ -785,7 +803,7 @@ func (h *home) handleConfirmKey(key string) tea.Cmd {
 			pr := h.pr.prList.SelectedPR()
 			if pr != nil {
 				k := PRKey(pr)
-				wtPath := h.worktrees[k]
+				wtPath, _, _ := h.worktreePathForKey(k)
 				return fixCommitPushCmd(wtPath, k)
 			}
 		case confirmDeleteRepo:
@@ -951,6 +969,29 @@ func (h *home) wtManagerForKey(key ItemKey) *worktree.Manager {
 	return nil
 }
 
+func countInitialFetches(repos []config.RepoEntry) int {
+	total := 0
+	for _, repo := range repos {
+		if repo.HasFeature("prs") {
+			total++
+		}
+		if repo.HasFeature("issues") {
+			total++
+		}
+	}
+	return total
+}
+
+func repoResolutionWarningMessage(warnings []error) string {
+	if len(warnings) == 0 {
+		return ""
+	}
+	if len(warnings) == 1 {
+		return fmt.Sprintf("Skipped invalid repo source: %v", warnings[0])
+	}
+	return fmt.Sprintf("Skipped %d invalid repo sources; first: %v", len(warnings), warnings[0])
+}
+
 func Run() error {
 	debug.Log("[Run] starting approver")
 	if err := gh.CheckGHInstalled(); err != nil {
@@ -972,11 +1013,14 @@ func Run() error {
 		for i, src := range cfg.RepoSources {
 			debug.Log("[Run]   source[%d]: path=%q scan_dir=%q host=%q", i, src.Path, src.ScanDir, src.Host)
 		}
-		repos, err := config.ResolveRepoDirs(cfg.RepoSources)
-		if err != nil {
-			return fmt.Errorf("resolving repo sources: %w", err)
+		repos, warnings := config.ResolveRepoDirsLenient(cfg.RepoSources)
+		for _, warning := range warnings {
+			debug.Log("[Run] skipping repo source: %v", warning)
 		}
 		if len(repos) == 0 {
+			if len(warnings) > 0 {
+				return fmt.Errorf("no valid git repositories found in repo_sources; first skipped source: %w", warnings[0])
+			}
 			return fmt.Errorf("no valid git repositories found in repo_sources")
 		}
 		debug.Log("[Run] resolved %d repos", len(repos))
@@ -985,6 +1029,9 @@ func Run() error {
 		}
 		h.repos = repos
 		h.repoDir = repos[0].Dir
+		if msg := repoResolutionWarningMessage(warnings); msg != "" {
+			h.showInfo(msg)
+		}
 	} else {
 		repoDir, err := os.Getwd()
 		if err != nil {
@@ -1043,6 +1090,12 @@ func Run() error {
 			return fmt.Errorf("initializing worktree manager for %s: %w", repo.Name, err)
 		}
 		h.wtManagers[repo.Name] = wtm
+	}
+
+	h.pendingFetches = countInitialFetches(h.repos)
+	if h.pendingFetches == 0 {
+		h.loading = false
+		h.state = stateDefault
 	}
 
 	p := tea.NewProgram(h, tea.WithAltScreen())

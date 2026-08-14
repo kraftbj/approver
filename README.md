@@ -63,6 +63,7 @@ Switch between screens with `1`, `2`, `3`:
 | `w` / `W` | Create / delete worktree |
 | `c` | Start Claude AI review (auto-creates worktree) |
 | `t` | Open Claude tmux session (auto-creates worktree) |
+| `T` | Open prompted Claude review tmux session (auto-creates worktree) |
 | `A` | Approve PR (with confirmation) |
 | `X` | Request changes (with reason) |
 | `u` | Update branch (merge base into worktree) |
@@ -86,7 +87,7 @@ pr_limit: 100
 # Background refresh interval in seconds (default: 300, 0 to disable)
 poll_interval: 300
 
-# Override worktree directory (default: ../approver-worktrees/)
+# Override worktree directory (default: ~/.config/approver/worktrees/{repo})
 worktree_dir: ~/worktrees
 
 # Custom prompt for AI review
@@ -100,6 +101,14 @@ repos:
   my-org/my-repo:
     setup_command: "npm install"
 ```
+
+### Conductor workspaces
+
+On macOS, Approver automatically reads Conductor's local database when available.
+Ready Conductor workspaces are treated as existing worktrees when their repo root
+and branch match a fetched PR. They show as `Worktree: Conductor` and are reused
+for review, fix, tmux, update, and push actions. Approver does not delete
+Conductor-managed workspaces; archive those in Conductor.
 
 ## License
 

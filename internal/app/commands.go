@@ -12,6 +12,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/kraft/approver/internal/claude"
+	"github.com/kraft/approver/internal/conductor"
 	"github.com/kraft/approver/internal/config"
 	"github.com/kraft/approver/internal/debug"
 	gh "github.com/kraft/approver/internal/github"
@@ -115,6 +116,16 @@ func scanIssueWorktreesCmd(mgr *worktree.Manager, repoName string) tea.Cmd {
 	}
 }
 
+func scanConductorWorkspacesCmd() tea.Cmd {
+	return func() tea.Msg {
+		workspaces, err := conductor.LoadReadyWorkspaces()
+		if err != nil {
+			return conductorWorkspacesErrorMsg{err: err}
+		}
+		return conductorWorkspacesLoadedMsg{workspaces: workspaces}
+	}
+}
+
 func pollTick(intervalSeconds int) tea.Cmd {
 	return tea.Tick(time.Duration(intervalSeconds)*time.Second, func(time.Time) tea.Msg {
 		return pollTickMsg{}
@@ -167,9 +178,9 @@ func detectAndFetchItemCmd(repoDir string, key ItemKey, input string) tea.Cmd {
 	}
 }
 
-func removeTrackedPRCmd(prNumber int) tea.Cmd {
+func removeTrackedPRCmd(prNumber int, repo string) tea.Cmd {
 	return func() tea.Msg {
-		if err := removeTrackedPR(prNumber); err != nil {
+		if err := removeTrackedPR(prNumber, repo); err != nil {
 			return trackedRemoveErrorMsg{err: err}
 		}
 		return nil

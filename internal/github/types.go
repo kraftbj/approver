@@ -15,19 +15,19 @@ type Comment struct {
 
 // PR represents a GitHub pull request, matching the gh --json output format.
 type PR struct {
-	Number         int            `json:"number"`
-	Title          string         `json:"title"`
-	Author         Author         `json:"author"`
-	HeadRefName    string         `json:"headRefName"`
-	BaseRefName    string         `json:"baseRefName"`
-	URL            string         `json:"url"`
-	ReviewDecision string         `json:"reviewDecision"`
-	StatusChecks   StatusChecks   `json:"statusCheckRollup"`
-	Labels         []Label        `json:"labels"`
-	Additions      int            `json:"additions"`
-	Deletions      int            `json:"deletions"`
-	UpdatedAt      time.Time      `json:"updatedAt"`
-	State          string         `json:"state"`
+	Number         int          `json:"number"`
+	Title          string       `json:"title"`
+	Author         Author       `json:"author"`
+	HeadRefName    string       `json:"headRefName"`
+	BaseRefName    string       `json:"baseRefName"`
+	URL            string       `json:"url"`
+	ReviewDecision string       `json:"reviewDecision"`
+	StatusChecks   StatusChecks `json:"statusCheckRollup"`
+	Labels         []Label      `json:"labels"`
+	Additions      int          `json:"additions"`
+	Deletions      int          `json:"deletions"`
+	UpdatedAt      time.Time    `json:"updatedAt"`
+	State          string       `json:"state"`
 
 	// Review data
 	ReviewRequests []ReviewRequest `json:"reviewRequests"`
@@ -48,6 +48,9 @@ type PR struct {
 
 	// HasWorktree is set at runtime by reconciling with worktree state.
 	HasWorktree bool `json:"-"`
+
+	// WorktreeSource is "approver" or "conductor" when HasWorktree is true.
+	WorktreeSource string `json:"-"`
 
 	// HasReview is set at runtime when a completed review exists.
 	HasReview bool `json:"-"`
@@ -303,7 +306,6 @@ type Issue struct {
 
 	// HasTmux is set at runtime when a tmux Claude session exists.
 	HasTmux bool `json:"-"`
-
 }
 
 // RelativeTime returns a human-readable relative time for an issue.

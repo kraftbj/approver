@@ -57,6 +57,7 @@ func (h *home) viewHelp(height int) string {
     W              Delete worktree (with confirmation)
     c              Start/cancel Claude review (auto-creates worktree)
     t              Open Claude tmux session (auto-creates worktree)
+    T              Open Claude review tmux session (auto-creates worktree)
     A              Approve PR (with confirmation)
     X              Request changes (with reason)
     u              Update branch (merge base into worktree)
@@ -161,6 +162,16 @@ func (h *home) showInfo(msg string) {
 	h.errBox.SetInfo(msg)
 }
 
+func (h *home) worktreePathForKey(key ItemKey) (string, string, bool) {
+	if path, ok := h.worktrees[key]; ok {
+		return path, "approver", true
+	}
+	if path, ok := h.conductorWorktrees[key]; ok {
+		return path, "conductor", true
+	}
+	return "", "", false
+}
+
 func (h *home) addPRToList(pr gh.PR) {
 	for i, existing := range h.pr.prList.PRs {
 		if existing.Number == pr.Number && existing.Repo == pr.Repo {
@@ -172,9 +183,9 @@ func (h *home) addPRToList(pr gh.PR) {
 	h.pr.prList.RebuildDisplayOrder()
 }
 
-func (h *home) removePR(number int) {
+func (h *home) removePR(key ItemKey) {
 	for i, pr := range h.pr.prList.PRs {
-		if pr.Number == number {
+		if PRKey(&pr) == key {
 			h.pr.prList.PRs = append(h.pr.prList.PRs[:i], h.pr.prList.PRs[i+1:]...)
 			if h.pr.prList.Selected >= len(h.pr.prList.PRs) {
 				h.pr.prList.Selected = max(0, len(h.pr.prList.PRs)-1)
@@ -196,9 +207,9 @@ func (h *home) addIssueToList(issue gh.Issue) {
 	h.issues.issueList.RebuildDisplayOrder()
 }
 
-func (h *home) removeIssue(number int) {
+func (h *home) removeIssue(key ItemKey) {
 	for i, issue := range h.issues.issueList.Issues {
-		if issue.Number == number {
+		if IssueKey(&issue) == key {
 			h.issues.issueList.Issues = append(h.issues.issueList.Issues[:i], h.issues.issueList.Issues[i+1:]...)
 			if h.issues.issueList.Selected >= len(h.issues.issueList.Issues) {
 				h.issues.issueList.Selected = max(0, len(h.issues.issueList.Issues)-1)
@@ -251,6 +262,8 @@ func (h *home) dispatchPending(key ItemKey, wtPath string) tea.Cmd {
 		return h.startReview(key, wtPath, repoDir)
 	case pendingTmux:
 		return h.startTmux(key, wtPath)
+	case pendingReviewTmux:
+		return h.startReviewTmux(key, wtPath)
 	}
 	return nil
 }
@@ -258,6 +271,34 @@ func (h *home) dispatchPending(key ItemKey, wtPath string) tea.Cmd {
 func (h *home) clearPending() {
 	h.pending = pendingNone
 	h.pendingKey = ItemKey{}
+}
+
+func (h *home) startReviewTmux(key ItemKey, wtPath string) tea.Cmd {
+	prompt := ""
+	if pr := h.prForKey(key); pr != nil {
+		customPrompt := ""
+		if h.cfg != nil {
+			customPrompt = h.cfg.ReviewPrompt
+		}
+		prompt = claude.InteractiveReviewPrompt(pr.Number, pr.BaseRefName, pr.HeadRefName, customPrompt)
+	}
+
+	session, ok := h.reviewTmuxSessions[key]
+	if !ok || !session.Exists() {
+		session = claude.NewReviewTmuxSession(key.Number, wtPath)
+		if err := session.CreateWithPrompt(prompt); err != nil {
+			h.showError(fmt.Sprintf("Failed to create review tmux session: %v", err))
+			return clearErrorAfter(3 * time.Second)
+		}
+		h.reviewTmuxSessions[key] = session
+		h.reconcileClaudeState()
+	}
+	return tea.ExecProcess(session.AttachCmd(), func(err error) tea.Msg {
+		if err != nil {
+			return tmuxSessionErrorMsg{err: err}
+		}
+		return nil
+	})
 }
 
 func (h *home) startIssueTmux(key ItemKey, wtPath string) tea.Cmd {
@@ -285,6 +326,15 @@ func (h *home) dispatchIssuePending(key ItemKey, wtPath string) tea.Cmd {
 	switch action {
 	case pendingIssueTmux:
 		return h.startIssueTmux(key, wtPath)
+	}
+	return nil
+}
+
+func (h *home) prForKey(key ItemKey) *gh.PR {
+	for i := range h.pr.prList.PRs {
+		if PRKey(&h.pr.prList.PRs[i]) == key {
+			return &h.pr.prList.PRs[i]
+		}
 	}
 	return nil
 }
@@ -336,7 +386,7 @@ func (h *home) handleFixSelectKey(key string) tea.Cmd {
 			return nil
 		}
 		k := PRKey(pr)
-		wtPath := h.worktrees[k]
+		wtPath, _, _ := h.worktreePathForKey(k)
 		h.state = stateDefault
 		return h.startFix(k, wtPath, selected)
 	case "esc":
@@ -472,11 +522,11 @@ func (h *home) viewRepoSelectOverlay(base string, height int) string {
 	return placeOverlay(h.width, height, base, overlay)
 }
 
-func (h *home) repoSetupCommand() string {
+func (h *home) repoSetupCommand(key ItemKey) string {
 	if h.cfg == nil {
 		return ""
 	}
-	remoteURL, err := gh.ParseRepoFromDir(h.repoDir)
+	remoteURL, err := gh.ParseRepoFromDir(h.repoDirForKey(key))
 	if err != nil {
 		return ""
 	}

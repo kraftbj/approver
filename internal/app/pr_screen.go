@@ -46,7 +46,7 @@ func (s *prScreen) HandleKey(h *home, key string) tea.Cmd {
 		h.state = stateLoading
 		h.pendingFetches = 0
 		var cmds []tea.Cmd
-		cmds = append(cmds, h.spinner.Tick)
+		cmds = append(cmds, h.spinner.Tick, scanConductorWorkspacesCmd())
 		for _, repo := range h.repos {
 			if repo.HasFeature("prs") {
 				cmds = append(cmds, fetchPRsCmd(repo.Dir, repo.Name, h.cfg.PRLimit))
@@ -69,8 +69,8 @@ func (s *prScreen) HandleKey(h *home, key string) tea.Cmd {
 		pr := s.prList.SelectedPR()
 		if pr != nil {
 			k := PRKey(pr)
-			if _, exists := h.worktrees[k]; exists {
-				h.showError(fmt.Sprintf("Worktree already exists for PR #%d", pr.Number))
+			if _, source, exists := h.worktreePathForKey(k); exists {
+				h.showError(fmt.Sprintf("Worktree already exists for PR #%d (%s)", pr.Number, source))
 				return clearErrorAfter(3 * time.Second)
 			}
 			if h.creatingWorktrees[k] {
@@ -86,9 +86,14 @@ func (s *prScreen) HandleKey(h *home, key string) tea.Cmd {
 		pr := s.prList.SelectedPR()
 		if pr != nil {
 			k := PRKey(pr)
-			if _, exists := h.worktrees[k]; !exists {
+			_, source, exists := h.worktreePathForKey(k)
+			if !exists {
 				h.showError(fmt.Sprintf("No worktree for PR #%d", pr.Number))
 				return clearErrorAfter(3 * time.Second)
+			}
+			if source == "conductor" {
+				h.showError(fmt.Sprintf("PR #%d is using a Conductor workspace; archive it in Conductor", pr.Number))
+				return clearErrorAfter(4 * time.Second)
 			}
 			h.state = stateConfirm
 			h.confirmAction = confirmDeleteWorktree
@@ -105,7 +110,7 @@ func (s *prScreen) HandleKey(h *home, key string) tea.Cmd {
 			h.showError("claude CLI not found on PATH")
 			return clearErrorAfter(3 * time.Second)
 		}
-		if _, exists := h.worktrees[k]; !exists {
+		if _, _, exists := h.worktreePathForKey(k); !exists {
 			h.showError(fmt.Sprintf("No worktree for PR #%d — create one first with w", pr.Number))
 			return clearErrorAfter(3 * time.Second)
 		}
@@ -181,7 +186,7 @@ func (s *prScreen) HandleKey(h *home, key string) tea.Cmd {
 			h.reconcileClaudeState()
 			return nil
 		}
-		wtPath, exists := h.worktrees[k]
+		wtPath, _, exists := h.worktreePathForKey(k)
 		if !exists {
 			if h.creatingWorktrees[k] {
 				return nil
@@ -209,7 +214,7 @@ func (s *prScreen) HandleKey(h *home, key string) tea.Cmd {
 			h.showError("claude CLI not found on PATH")
 			return clearErrorAfter(3 * time.Second)
 		}
-		wtPath, exists := h.worktrees[k]
+		wtPath, _, exists := h.worktreePathForKey(k)
 		if !exists {
 			if h.creatingWorktrees[k] {
 				return nil
@@ -223,11 +228,39 @@ func (s *prScreen) HandleKey(h *home, key string) tea.Cmd {
 		}
 		return h.startTmux(k, wtPath)
 
+	case "T":
+		pr := s.prList.SelectedPR()
+		if pr == nil {
+			return nil
+		}
+		k := PRKey(pr)
+		if !claude.CheckTmux() {
+			h.showError("tmux not found on PATH")
+			return clearErrorAfter(3 * time.Second)
+		}
+		if !claude.CheckClaude() {
+			h.showError("claude CLI not found on PATH")
+			return clearErrorAfter(3 * time.Second)
+		}
+		wtPath, _, exists := h.worktreePathForKey(k)
+		if !exists {
+			if h.creatingWorktrees[k] {
+				return nil
+			}
+			h.pending = pendingReviewTmux
+			h.pendingKey = k
+			h.creatingWorktrees[k] = true
+			h.reconcileWorktrees()
+			mgr := h.wtManagerForKey(k)
+			return tea.Batch(h.spinner.Tick, createWorktreeCmd(mgr, k, pr.HeadRefName))
+		}
+		return h.startReviewTmux(k, wtPath)
+
 	case "u":
 		pr := s.prList.SelectedPR()
 		if pr != nil {
 			k := PRKey(pr)
-			if _, exists := h.worktrees[k]; !exists {
+			if _, _, exists := h.worktreePathForKey(k); !exists {
 				h.showError(fmt.Sprintf("No worktree for PR #%d — create one first with w", pr.Number))
 				return clearErrorAfter(3 * time.Second)
 			}
@@ -270,15 +303,15 @@ func (s *prScreen) HandleKey(h *home, key string) tea.Cmd {
 		pr := s.prList.SelectedPR()
 		if pr != nil {
 			if pr.Source == "manual" {
-				h.removePR(pr.Number)
-				return removeTrackedPRCmd(pr.Number)
+				h.removePR(PRKey(pr))
+				return removeTrackedPRCmd(pr.Number, pr.Repo)
 			}
 			// Auto-fetched: add to exclude list
 			if err := addExcludedPR(pr.Number, pr.Repo); err != nil {
 				h.showError(fmt.Sprintf("Failed to exclude PR: %v", err))
 				return clearErrorAfter(3 * time.Second)
 			}
-			h.removePR(pr.Number)
+			h.removePR(PRKey(pr))
 		}
 
 	case "?":
@@ -295,6 +328,7 @@ func (s *prScreen) Hints() []ui.KeyHint {
 		{Key: "c", Desc: "review"},
 		{Key: "F", Desc: "fix"},
 		{Key: "t", Desc: "tmux"},
+		{Key: "T", Desc: "review tmux"},
 		{Key: "S", Desc: "save review"},
 		{Key: "A", Desc: "approve"},
 		{Key: "a", Desc: "add"},
@@ -336,7 +370,7 @@ func (s *prScreen) viewDashboard(h *home, height int) string {
 	if s.detailMode == detailReview {
 		if pr != nil {
 			k := PRKey(pr)
-			_, hasWT := h.worktrees[k]
+			_, _, hasWT := h.worktreePathForKey(k)
 			if _, reviewing := h.reviewing[k]; reviewing {
 				step := h.reviewStep[k]
 				detailView = s.detail.ViewReviewing(pr, h.spinner.View(), step)
@@ -371,7 +405,7 @@ func (s *prScreen) viewDashboard(h *home, height int) string {
 			} else if output, ok := h.fixResults[k]; ok {
 				detailView = s.detail.ViewFixResult(pr, output)
 			} else {
-				_, hasWT := h.worktrees[k]
+				_, _, hasWT := h.worktreePathForKey(k)
 				detailView = s.detail.ViewFixEmpty(pr, hasWT)
 			}
 		} else {

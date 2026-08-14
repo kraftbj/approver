@@ -66,37 +66,45 @@ func saveTrackedPRs(tracked []trackedPR) error {
 }
 
 // addTrackedPR adds a PR number to the tracked list.
-func addTrackedPR(prNumber int) error {
+func addTrackedPR(prNumber int, repo string) error {
 	tracked, err := loadTrackedPRs()
 	if err != nil {
 		return err
 	}
 
 	// Dedup
-	for _, t := range tracked {
-		if t.Number == prNumber {
+	for i, t := range tracked {
+		if t.Number == prNumber && trackedRepoMatches(t.Repo, repo) {
+			if t.Repo == "" && repo != "" {
+				tracked[i].Repo = repo
+				return saveTrackedPRs(tracked)
+			}
 			return nil
 		}
 	}
 
-	tracked = append(tracked, trackedPR{Number: prNumber})
+	tracked = append(tracked, trackedPR{Number: prNumber, Repo: repo})
 	return saveTrackedPRs(tracked)
 }
 
 // removeTrackedPR removes a PR number from the tracked list.
-func removeTrackedPR(prNumber int) error {
+func removeTrackedPR(prNumber int, repo string) error {
 	tracked, err := loadTrackedPRs()
 	if err != nil {
 		return err
 	}
 
 	for i, t := range tracked {
-		if t.Number == prNumber {
+		if t.Number == prNumber && trackedRepoMatches(t.Repo, repo) {
 			tracked = append(tracked[:i], tracked[i+1:]...)
 			return saveTrackedPRs(tracked)
 		}
 	}
 	return nil
+}
+
+func trackedRepoMatches(storedRepo, repo string) bool {
+	return storedRepo == repo || storedRepo == "" || repo == ""
 }
 
 // trackedPRsLoadedMsg carries the fetched tracked PRs to merge into the main list.
@@ -138,7 +146,7 @@ func fetchTrackedPRsCmd(repos []config.RepoEntry) tea.Cmd {
 			}
 			// Drop closed/merged tracked PRs
 			if pr.State == "CLOSED" || pr.State == "MERGED" {
-				_ = removeTrackedPR(t.Number)
+				_ = removeTrackedPR(t.Number, t.Repo)
 				continue
 			}
 			pr.Source = "manual"
@@ -150,4 +158,3 @@ func fetchTrackedPRsCmd(repos []config.RepoEntry) tea.Cmd {
 		return trackedPRsLoadedMsg{prs: prs}
 	}
 }
-

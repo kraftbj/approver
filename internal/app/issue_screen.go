@@ -127,15 +127,15 @@ func (s *issueScreen) HandleKey(h *home, key string) tea.Cmd {
 		issue := s.issueList.SelectedIssue()
 		if issue != nil {
 			if issue.Source == "manual" {
-				h.removeIssue(issue.Number)
-				return removeTrackedIssueCmd(issue.Number)
+				h.removeIssue(IssueKey(issue))
+				return removeTrackedIssueCmd(issue.Number, issue.Repo)
 			}
 			// Auto-fetched: add to exclude list
 			if err := addExcludedIssue(issue.Number, issue.Repo); err != nil {
 				h.showError(fmt.Sprintf("Failed to exclude issue: %v", err))
 				return clearErrorAfter(3 * time.Second)
 			}
-			h.removeIssue(issue.Number)
+			h.removeIssue(IssueKey(issue))
 		}
 
 	case "c":
@@ -305,9 +305,9 @@ func deleteIssueWorktreeCmd(mgr *worktree.Manager, key ItemKey) tea.Cmd {
 	}
 }
 
-func removeTrackedIssueCmd(issueNumber int) tea.Cmd {
+func removeTrackedIssueCmd(issueNumber int, repo string) tea.Cmd {
 	return func() tea.Msg {
-		if err := removeTrackedIssue(issueNumber); err != nil {
+		if err := removeTrackedIssue(issueNumber, repo); err != nil {
 			return trackedRemoveErrorMsg{err: err}
 		}
 		return nil
@@ -348,7 +348,7 @@ func fetchTrackedIssuesCmd(repos []config.RepoEntry) tea.Cmd {
 			}
 			// Drop closed tracked issues
 			if issue.State == "CLOSED" {
-				_ = removeTrackedIssue(t.Number)
+				_ = removeTrackedIssue(t.Number, t.Repo)
 				continue
 			}
 			issue.Source = "manual"
